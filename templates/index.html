@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WellMech — Механика нефтяных скважин</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+<body>
+
+<div class="app">
+    <!-- ═══════════════════════════ SIDEBAR ═══════════════════════════ -->
+    <aside class="sidebar">
+        <div class="sidebar-logo">
+            <span class="logo-icon">W</span>
+            <span class="logo-text">WellMech</span>
+        </div>
+        <nav class="sidebar-nav">
+            <div class="nav-item active" data-tab="well">
+                <span class="nav-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="2" x2="12" y2="22"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"/></svg>
+                </span>
+                Скважина
+            </div>
+            <div class="nav-item" data-tab="assembly">
+                <span class="nav-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                </span>
+                Компоновка
+            </div>
+            <div class="nav-item" data-tab="calculations">
+                <span class="nav-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                </span>
+                Расчёты
+            </div>
+            <div class="nav-item" data-tab="export">
+                <span class="nav-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </span>
+                Экспорт
+            </div>
+        </nav>
+        <div class="sidebar-footer">
+            WellMech v1.0<br>Модель Johancsik, 1984
+        </div>
+    </aside>
+
+    <!-- ═══════════════════════════ MAIN ═══════════════════════════ -->
+    <main class="main">
+
+        <!-- ─────────── TAB 1: СКВАЖИНА ─────────── -->
+        <div class="tab-content active" id="tab-well">
+            <div class="page-header">
+                <h1 class="page-title">Скважина</h1>
+                <p class="page-subtitle">Инклинометрия, параметры раствора и коэффициент трения</p>
+            </div>
+            <div class="content">
+                <!-- Данные замеров -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Данные замеров инклинометрии</span>
+                        <div class="mode-toggle">
+                            <button class="toggle-btn active" data-mode="manual" onclick="setInputMode('manual')">Ввод вручную</button>
+                            <button class="toggle-btn" data-mode="file" onclick="setInputMode('file')">Загрузить файл</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <!-- Ручной ввод -->
+                        <div id="manual-input">
+                            <div class="btn-group" style="margin-bottom:12px">
+                                <button class="btn btn-secondary btn-sm" onclick="addSurveyRow()">+ Добавить строку</button>
+                                <button class="btn btn-ghost btn-sm" onclick="removeSurveyRow()">Удалить последнюю</button>
+                                <button class="btn btn-ghost btn-sm" onclick="loadSampleSurvey()">Образец данных</button>
+                            </div>
+                            <div class="table-wrap">
+                                <table class="data-table" id="survey-table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:40px">№</th>
+                                            <th>Глубина (м)</th>
+                                            <th>Зенитный угол (°)</th>
+                                            <th>Азимут (°)</th>
+                                            <th style="width:36px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="survey-tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <!-- Загрузка файла -->
+                        <div id="file-input" style="display:none">
+                            <div class="upload-zone" id="upload-zone"
+                                 onclick="document.getElementById('file-upload').click()">
+                                <div class="upload-icon">&#128194;</div>
+                                <div class="upload-text">Перетащите файл сюда или нажмите для выбора</div>
+                                <div class="upload-hint">CSV или Excel (.xlsx) с колонками: Глубина, Зенитный угол, Азимут</div>
+                                <input type="file" id="file-upload" accept=".csv,.xlsx,.xls"
+                                       style="display:none" onchange="handleFileUpload(event)">
+                            </div>
+                            <div id="upload-status" style="margin-top:12px"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Буровой раствор -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Буровой раствор</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-row cols-3">
+                            <div class="form-group">
+                                <label class="form-label">Плотность раствора (г/см³)</label>
+                                <input type="number" class="form-input" id="fluid-density"
+                                       value="1.20" step="0.01" min="0.8" max="2.5">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Коэффициент трения -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Коэффициент трения</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-row cols-2">
+                            <div class="form-group">
+                                <label class="form-label">Открытый ствол (μ)</label>
+                                <input type="number" class="form-input" id="mu-open"
+                                       value="0.25" step="0.01" min="0.05" max="0.8">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Обсадная колонна (μ)</label>
+                                <input type="number" class="form-input" id="mu-cased"
+                                       value="0.20" step="0.01" min="0.05" max="0.8">
+                            </div>
+                        </div>
+                        <div class="separator"></div>
+                        <div style="margin-bottom:8px">
+                            <span class="form-label" style="display:inline">Пользовательские интервалы</span>
+                            <span class="form-hint" style="display:inline;margin-left:6px">
+                                Задайте μ для конкретных интервалов глубин (перекрывают значения выше)
+                            </span>
+                        </div>
+                        <div class="btn-group" style="margin-bottom:10px">
+                            <button class="btn btn-secondary btn-sm" onclick="addMuRow()">+ Добавить интервал</button>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="data-table" id="mu-table">
+                                <thead>
+                                    <tr>
+                                        <th>Глубина от (м)</th>
+                                        <th>Глубина до (м)</th>
+                                        <th>μ</th>
+                                        <th style="width:36px"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="mu-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─────────── TAB 2: КОМПОНОВКА ─────────── -->
+        <div class="tab-content" id="tab-assembly">
+            <div class="page-header">
+                <h1 class="page-title">Компоновка</h1>
+                <p class="page-subtitle">Элементы бурильной колонны от забоя к устью</p>
+            </div>
+            <div class="content">
+                <div class="alert alert-info">
+                    Заполняйте компоновку снизу вверх — от забоя к устью скважины. Первый элемент — самый нижний (например, долото).
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Элементы компоновки</span>
+                        <div class="btn-group">
+                            <button class="btn btn-secondary btn-sm" onclick="addAssemblyRow()">+ Добавить элемент</button>
+                            <button class="btn btn-ghost btn-sm" onclick="removeAssemblyRow()">Удалить последний</button>
+                            <button class="btn btn-ghost btn-sm" onclick="clearAssembly()">Очистить</button>
+                            <button class="btn btn-ghost btn-sm" onclick="loadSampleAssembly()">Образец</button>
+                        </div>
+                    </div>
+                    <div class="card-body no-pad">
+                        <div class="table-wrap">
+                            <table class="data-table" id="assembly-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:36px">№</th>
+                                        <th style="min-width:140px">Название элемента</th>
+                                        <th>Длина (м)</th>
+                                        <th>Вес в воздухе (кг)</th>
+                                        <th>Нар. диаметр (мм)</th>
+                                        <th>Макс. нагрузка (кН)</th>
+                                        <th style="width:36px"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="assembly-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="card" id="assembly-summary">
+                    <div class="card-header">
+                        <span class="card-title">Сводка</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="stats-row">
+                            <div class="stat-card">
+                                <div class="stat-label">Общая длина</div>
+                                <div class="stat-value" id="total-length">0<span class="stat-unit">м</span></div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Вес в воздухе</div>
+                                <div class="stat-value" id="total-weight">0<span class="stat-unit">кг</span></div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Вес с архим. поправкой</div>
+                                <div class="stat-value" id="buoyed-weight">0<span class="stat-unit">кН</span></div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Элементов</div>
+                                <div class="stat-value" id="total-elements">0</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─────────── TAB 3: РАСЧЁТЫ ─────────── -->
+        <div class="tab-content" id="tab-calculations">
+            <div class="page-header">
+                <h1 class="page-title">Расчёты</h1>
+                <p class="page-subtitle">Доходимость, усилие срыва пакера, вес на крюке</p>
+            </div>
+            <div class="content">
+                <div class="accordion">
+                    <!-- РАСЧЁТ 1 -->
+                    <div class="accordion-item open">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div style="display:flex;align-items:center">
+                                <span class="accordion-number">1</span>
+                                <span class="accordion-title">Доходимость до целевой глубины</span>
+                            </div>
+                            <span class="accordion-chevron">&#9662;</span>
+                        </div>
+                        <div class="accordion-body">
+                            <div class="form-row cols-3">
+                                <div class="form-group">
+                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <input type="number" class="form-input" id="reach-target-depth"
+                                           placeholder="3000" step="1" min="0">
+                                </div>
+                            </div>
+                            <div class="btn-group" style="margin-top:8px">
+                                <button class="btn btn-primary" id="btn-calc-reach" onclick="calcReachability()">
+                                    Рассчитать
+                                </button>
+                                <span id="reach-spinner" class="spinner" style="display:none"></span>
+                            </div>
+                            <div id="reach-results" style="display:none;margin-top:20px">
+                                <div id="reach-status-box" class="result-box"></div>
+                                <div class="stats-row" id="reach-stats"></div>
+                                <div class="chart-container" id="reach-chart" style="margin-top:16px"></div>
+                                <div class="separator"></div>
+                                <details class="details-block">
+                                    <summary class="details-summary">Таблица сил по интервалам</summary>
+                                    <div class="table-wrap" style="margin-top:8px">
+                                        <table class="data-table" id="reach-force-table">
+                                            <thead><tr>
+                                                <th>Глубина (м)</th><th>Элемент</th>
+                                                <th>Сила (кН)</th><th>Трение (кН)</th>
+                                            </tr></thead>
+                                            <tbody id="reach-force-tbody"></tbody>
+                                        </table>
+                                    </div>
+                                </details>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- РАСЧЁТ 2 -->
+                    <div class="accordion-item">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div style="display:flex;align-items:center">
+                                <span class="accordion-number">2</span>
+                                <span class="accordion-title">Усилие срыва пакера</span>
+                            </div>
+                            <span class="accordion-chevron">&#9662;</span>
+                        </div>
+                        <div class="accordion-body">
+                            <div class="form-row cols-3">
+                                <div class="form-group">
+                                    <label class="form-label">Усилие посадки пакера (кН)</label>
+                                    <input type="number" class="form-input" id="packer-set-force"
+                                           placeholder="50" step="1" min="0">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Элемент-пакер</label>
+                                    <select class="form-input" id="packer-element-select">
+                                        <option value="">— Выберите —</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <input type="number" class="form-input" id="packer-target-depth"
+                                           placeholder="3000" step="1" min="0">
+                                </div>
+                            </div>
+                            <div class="btn-group" style="margin-top:8px">
+                                <button class="btn btn-primary" id="btn-calc-packer" onclick="calcPacker()">
+                                    Рассчитать
+                                </button>
+                                <span id="packer-spinner" class="spinner" style="display:none"></span>
+                            </div>
+                            <div id="packer-results" style="display:none;margin-top:20px">
+                                <div id="packer-status-box" class="result-box"></div>
+                                <div class="stats-row" id="packer-stats"></div>
+                                <div class="table-wrap" style="margin-top:16px">
+                                    <table class="data-table" id="packer-check-table">
+                                        <thead><tr>
+                                            <th>Элемент</th><th>Макс. нагрузка (кН)</th>
+                                            <th>Факт. сила (кН)</th><th>Запас (%)</th><th>Статус</th>
+                                        </tr></thead>
+                                        <tbody id="packer-check-tbody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- РАСЧЁТ 3 -->
+                    <div class="accordion-item">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div style="display:flex;align-items:center">
+                                <span class="accordion-number">3</span>
+                                <span class="accordion-title">Вес на крюке при подъёме</span>
+                            </div>
+                            <span class="accordion-chevron">&#9662;</span>
+                        </div>
+                        <div class="accordion-body">
+                            <div class="form-row cols-3">
+                                <div class="form-group">
+                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <input type="number" class="form-input" id="hook-target-depth"
+                                           placeholder="3000" step="1" min="0">
+                                </div>
+                            </div>
+                            <div class="btn-group" style="margin-top:8px">
+                                <button class="btn btn-primary" id="btn-calc-hook" onclick="calcHookload()">
+                                    Рассчитать
+                                </button>
+                                <span id="hook-spinner" class="spinner" style="display:none"></span>
+                            </div>
+                            <div id="hook-results" style="display:none;margin-top:20px">
+                                <div class="stats-row" id="hook-stats"></div>
+                                <div class="chart-container" id="hook-chart" style="margin-top:16px"></div>
+                                <div class="separator"></div>
+                                <details class="details-block">
+                                    <summary class="details-summary">Таблица сил по интервалам</summary>
+                                    <div class="table-wrap" style="margin-top:8px">
+                                        <table class="data-table" id="hook-force-table">
+                                            <thead><tr>
+                                                <th>Глубина (м)</th><th>Элемент</th>
+                                                <th>Сила (кН)</th><th>Трение (кН)</th>
+                                            </tr></thead>
+                                            <tbody id="hook-force-tbody"></tbody>
+                                        </table>
+                                    </div>
+                                </details>
+                            </div>
+                        </div>
+                    </div>
+                </div><!-- /accordion -->
+            </div>
+        </div>
+
+        <!-- ─────────── TAB 4: ЭКСПОРТ ─────────── -->
+        <div class="tab-content" id="tab-export">
+            <div class="page-header">
+                <h1 class="page-title">Экспорт</h1>
+                <p class="page-subtitle">Скачайте отчёт в PDF или числовые данные в Excel</p>
+            </div>
+            <div class="content">
+                <div class="alert alert-info">
+                    Перед экспортом убедитесь, что все данные введены и расчёты выполнены. Отчёт формируется на основе текущих данных.
+                </div>
+                <div class="export-grid">
+                    <div class="card export-card">
+                        <div class="card-body" style="text-align:center;padding:32px 24px">
+                            <div class="export-icon">PDF</div>
+                            <h3 class="export-title">Отчёт PDF</h3>
+                            <p class="export-desc">Полный отчёт с входными данными, результатами расчётов и графиками</p>
+                            <button class="btn btn-primary" id="btn-export-pdf" onclick="exportPDF()">
+                                Скачать PDF
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card export-card">
+                        <div class="card-body" style="text-align:center;padding:32px 24px">
+                            <div class="export-icon xlsx">XLSX</div>
+                            <h3 class="export-title">Таблицы Excel</h3>
+                            <p class="export-desc">Числовые данные по каждому расчёту на отдельных листах</p>
+                            <button class="btn btn-primary" id="btn-export-excel" onclick="exportExcel()">
+                                Скачать Excel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card" style="margin-top:24px">
+                    <div class="card-header">
+                        <span class="card-title">Состояние данных</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="status-checklist" id="status-checklist">
+                            <div class="status-item" id="status-survey">
+                                <span class="status-dot"></span>
+                                Инклинометрия
+                            </div>
+                            <div class="status-item" id="status-assembly">
+                                <span class="status-dot"></span>
+                                Компоновка
+                            </div>
+                            <div class="status-item" id="status-reach">
+                                <span class="status-dot"></span>
+                                Расчёт доходимости
+                            </div>
+                            <div class="status-item" id="status-hook">
+                                <span class="status-dot"></span>
+                                Вес на крюке
+                            </div>
+                            <div class="status-item" id="status-packer">
+                                <span class="status-dot"></span>
+                                Усилие срыва пакера
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
