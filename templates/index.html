@@ -465,7 +465,7 @@
                         <div class="accordion-header" onclick="toggleAccordion(this)">
                             <div style="display:flex;align-items:center">
                                 <span class="accordion-number">3</span>
-                                <span class="accordion-title">Вес на крюке при подъёме</span>
+                                <span class="accordion-title">Вес на крюке — диапазон μ (RIH / POOH / пакер)</span>
                             </div>
                             <span class="accordion-chevron">&#9662;</span>
                         </div>
@@ -476,29 +476,33 @@
                                     <input type="number" class="form-input" id="hook-target-depth"
                                            placeholder="3000" step="1" min="0" data-unit-type="depth">
                                 </div>
+                                <div class="form-group">
+                                    <label class="form-label">μ минимальный</label>
+                                    <input type="number" class="form-input" id="hook-mu-min"
+                                           value="0.15" step="0.01" min="0.05" max="0.8">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">μ максимальный</label>
+                                    <input type="number" class="form-input" id="hook-mu-max"
+                                           value="0.30" step="0.01" min="0.05" max="0.8">
+                                </div>
+                            </div>
+                            <div class="form-row cols-3" style="margin-top:4px">
+                                <div class="form-group">
+                                    <label class="form-label">Усилие посадки пакера (кН) <span style="opacity:.6;font-weight:400">— опционально</span></label>
+                                    <input type="number" class="form-input" id="hook-packer-force"
+                                           placeholder="0" step="1" min="0">
+                                </div>
                             </div>
                             <div class="btn-group" style="margin-top:8px">
                                 <button class="btn btn-primary" id="btn-calc-hook" onclick="calcHookload()">
-                                    Рассчитать
+                                    Построить диаграмму
                                 </button>
                                 <span id="hook-spinner" class="spinner" style="display:none"></span>
                             </div>
                             <div id="hook-results" style="display:none;margin-top:20px">
                                 <div class="stats-row" id="hook-stats"></div>
-                                <div class="chart-container" id="hook-chart" style="margin-top:16px"></div>
-                                <div class="separator"></div>
-                                <details class="details-block">
-                                    <summary class="details-summary">Таблица сил по интервалам</summary>
-                                    <div class="table-wrap" style="margin-top:8px">
-                                        <table class="data-table" id="hook-force-table">
-                                            <thead><tr>
-                                                <th>Глубина (м)</th><th>Элемент</th>
-                                                <th>Сила (кН)</th><th>Трение (кН)</th>
-                                            </tr></thead>
-                                            <tbody id="hook-force-tbody"></tbody>
-                                        </table>
-                                    </div>
-                                </details>
+                                <div class="chart-container" id="hook-chart" style="margin-top:16px;min-height:500px"></div>
                             </div>
                         </div>
                     </div>

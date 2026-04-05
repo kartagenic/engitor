@@ -742,36 +742,62 @@ def calc_reachability():
 
 @app.route('/api/calculate/hookload', methods=['POST'])
 def calc_hookload():
-    """Расчёт 3 — Вес на крюке при подъёме."""
+    """Расчёт 3 — Диапазон веса на крюке (RIH / POOH / срыв пакера) при μ от min до max."""
     try:
         data = request.get_json()
-        survey = data['survey']
-        assembly = data['assembly']
-        target_depth = float(data['target_depth'])
+        survey        = data['survey']
+        assembly      = data['assembly']
+        target_depth  = float(data['target_depth'])
         fluid_density = float(data['fluid_density'])
-        mu_default = float(data.get('mu_default', 0.25))
-        mu_intervals = data.get('mu_intervals', [])
+        mu_min        = float(data.get('mu_min', 0.15))
+        mu_max        = float(data.get('mu_max', 0.30))
+        packer_force  = float(data.get('packer_set_force', 0.0))
 
         validate_survey(survey)
         validate_assembly(assembly)
 
-        forces, segments = johancsik_run(
-            assembly, survey, target_depth, fluid_density,
-            mu_default, mu_intervals, direction='up')
+        # Три значения μ: min, mid, max
+        mu_mid = round((mu_min + mu_max) / 2, 3)
+        mu_list = sorted({mu_min, mu_mid, mu_max})
 
-        hook_load = forces[-1]['force'] if forces else 0
-        total_weight_air = sum(e['weight_air'] for e in assembly) * G / 1000.0
+        bf = 1.0 - fluid_density / STEEL_DENSITY
+        total_weight_air_kN = sum(e['weight_air'] for e in assembly) * G / 1000.0
+
+        results = {}
+        for mu in mu_list:
+            f_rih,  _ = johancsik_run(assembly, survey, target_depth, fluid_density,
+                                      mu, [], direction='down')
+            f_pooh, _ = johancsik_run(assembly, survey, target_depth, fluid_density,
+                                      mu, [], direction='up')
+            results[mu] = {
+                'rih':  [{'depth': p['depth'], 'force': p['force']} for p in f_rih],
+                'pooh': [{'depth': p['depth'], 'force': p['force']} for p in f_pooh],
+            }
+
+        def surface(forces):
+            return forces[-1]['force'] if forces else 0.0
+
+        # Summary stats (at surface, i.e. last point returned by johancsik_run)
+        rih_min_F  = surface(results[mu_list[0]]['rih'])
+        rih_max_F  = surface(results[mu_list[-1]]['rih'])
+        pooh_min_F = surface(results[mu_list[0]]['pooh'])
+        pooh_max_F = surface(results[mu_list[-1]]['pooh'])
 
         return jsonify(
             success=True,
-            hook_load=round(hook_load, 2),
-            total_weight_air=round(total_weight_air, 2),
-            forces=forces,
-            segments=[{
-                'name': s['name'], 'top': s['top'], 'bottom': s['bottom'],
-                'W_b': s['W_b'], 'N': s['N'], 'friction': s['friction'],
-                'F_bottom': s['F_bottom'], 'F_top': s['F_top'], 'mu': s['mu']
-            } for s in segments],
+            mu_min=mu_min, mu_mid=mu_mid, mu_max=mu_max,
+            results=results,
+            packer_set_force=packer_force,
+            summary={
+                'rih_surface_min':  round(rih_min_F, 2),
+                'rih_surface_max':  round(rih_max_F, 2),
+                'pooh_surface_min': round(pooh_min_F, 2),
+                'pooh_surface_max': round(pooh_max_F, 2),
+                'packer_min': round(pooh_min_F + packer_force, 2),
+                'packer_max': round(pooh_max_F + packer_force, 2),
+                'total_weight_air': round(total_weight_air_kN, 2),
+                'buoyed_weight':    round(total_weight_air_kN * bf, 2),
+            },
         )
     except (ValueError, KeyError) as e:
         return jsonify(success=False, error=str(e))

@@ -896,6 +896,13 @@ async function calcHookload() {
     if (data.survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
     if (!data.assembly.length) { showError('Заполните компоновку'); return; }
 
+    const muMin  = parseFloat(document.getElementById('hook-mu-min').value)  || 0.15;
+    const muMax  = parseFloat(document.getElementById('hook-mu-max').value)  || 0.30;
+    const pkForce = parseFloat(document.getElementById('hook-packer-force').value) || 0;
+    data.mu_min = muMin;
+    data.mu_max = muMax;
+    data.packer_set_force = pkForce;
+
     document.getElementById('hook-spinner').style.display = '';
     document.getElementById('btn-calc-hook').disabled = true;
     document.getElementById('hook-results').style.display = 'none';
@@ -904,52 +911,40 @@ async function calcHookload() {
         const res = await apiPost('/api/calculate/hookload', data);
         document.getElementById('hook-results').style.display = '';
 
-        if (!res.success) {
-            showError(res.error);
-            return;
-        }
+        if (!res.success) { showError(res.error); return; }
 
         state.results.hookload = res;
+        const s = res.summary;
+        const depthUnit = UNITS[unitSystem].depth;
+        const forceUnit = UNITS[unitSystem].force;
 
-        // Статистика
+        // ── КPI cards ──────────────────────────────────────────
+        const fmt = v => fromSI(v, 'force').toFixed(1);
         document.getElementById('hook-stats').innerHTML = `
             <div class="stat-card">
-                <div class="stat-label">Макс. вес на крюке</div>
-                <div class="stat-value">${res.hook_load}<span class="stat-unit">кН</span></div>
+                <div class="stat-label">RIH (спуск) мин–макс</div>
+                <div class="stat-value">${fmt(s.rih_surface_min)}–${fmt(s.rih_surface_max)}<span class="stat-unit">${forceUnit}</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Вес колонны в воздухе</div>
-                <div class="stat-value">${res.total_weight_air}<span class="stat-unit">кН</span></div>
+                <div class="stat-label">POOH (подъём) мин–макс</div>
+                <div class="stat-value">${fmt(s.pooh_surface_min)}–${fmt(s.pooh_surface_max)}<span class="stat-unit">${forceUnit}</span></div>
+            </div>
+            ${pkForce > 0 ? `
+            <div class="stat-card">
+                <div class="stat-label">Срыв пакера мин–макс</div>
+                <div class="stat-value">${fmt(s.packer_min)}–${fmt(s.packer_max)}<span class="stat-unit">${forceUnit}</span></div>
+            </div>` : ''}
+            <div class="stat-card">
+                <div class="stat-label">Вес в воздухе</div>
+                <div class="stat-value">${fmt(s.total_weight_air)}<span class="stat-unit">${forceUnit}</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Разница (трение)</div>
-                <div class="stat-value">${(res.hook_load - res.total_weight_air).toFixed(1)}<span class="stat-unit">кН</span></div>
+                <div class="stat-label">Вес с BF (без трения)</div>
+                <div class="stat-value">${fmt(s.buoyed_weight)}<span class="stat-unit">${forceUnit}</span></div>
             </div>`;
 
-        // График
-        const depths = res.forces.map(f => f.depth);
-        const forces = res.forces.map(f => f.force);
-        const trace = {
-            x: forces, y: depths,
-            type: 'scatter', mode: 'lines+markers',
-            line: { color: '#00bcd4', width: 2 },
-            marker: { size: 4, color: '#00bcd4' },
-            name: 'Вес на крюке',
-            fill: 'tozerox', fillcolor: 'rgba(0,188,212,0.06)',
-        };
-        _plot('hook-chart', [trace], {
-            xaxis: { title: 'Осевая нагрузка (кН)' },
-            yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
-        });
-
-        // Таблица
-        const tbody = document.getElementById('hook-force-tbody');
-        tbody.innerHTML = '';
-        res.forces.forEach(f => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `<td>${f.depth}</td><td>${f.element}</td><td>${f.force}</td><td>${f.friction}</td>`;
-            tbody.appendChild(tr);
-        });
+        // ── Диапазонная диаграмма ─────────────────────────────
+        renderHookloadBandChart(res, muMin, muMax, pkForce);
 
     } catch (e) {
         showError('Ошибка: ' + e.message);
@@ -957,6 +952,104 @@ async function calcHookload() {
         document.getElementById('hook-spinner').style.display = 'none';
         document.getElementById('btn-calc-hook').disabled = false;
     }
+}
+
+function renderHookloadBandChart(res, muMin, muMax, pkForce) {
+    // res.results is keyed by mu value (as number, but JSON keys are strings)
+    const muKeys = Object.keys(res.results).map(Number).sort((a,b) => a - b);
+    const muLo = muKeys[0];
+    const muHi = muKeys[muKeys.length - 1];
+    const muMid = muKeys[Math.floor(muKeys.length / 2)];
+
+    function pts(mu, dir) {
+        const arr = res.results[mu][dir];
+        const xs = arr.map(p => fromSI(p.force, 'force'));
+        const ys = arr.map(p => fromSI(p.depth, 'depth'));
+        return { xs, ys };
+    }
+
+    const depthUnit = UNITS[unitSystem].depth;
+    const forceUnit = UNITS[unitSystem].force;
+
+    // Polygon helpers for fill-between bands
+    function band(loXs, hiXs, ys, fillColor, name, lineColor) {
+        const xPoly = [...hiXs, ...loXs.slice().reverse()];
+        const yPoly = [...ys, ...ys.slice().reverse()];
+        return {
+            x: xPoly, y: yPoly,
+            fill: 'toself', fillcolor: fillColor,
+            line: { color: 'rgba(0,0,0,0)', width: 0 },
+            mode: 'lines', type: 'scatter',
+            name, showlegend: true,
+            hoverinfo: 'skip',
+        };
+    }
+
+    function centerLine(mu, dir, color, name, dash) {
+        const { xs, ys } = pts(mu, dir);
+        return {
+            x: xs, y: ys, type: 'scatter', mode: 'lines',
+            line: { color, width: 2, dash: dash || 'solid' },
+            name,
+        };
+    }
+
+    const rihLo  = pts(muLo,  'rih');
+    const rihHi  = pts(muHi,  'rih');
+    const poohLo = pts(muLo,  'pooh');
+    const poohHi = pts(muHi,  'pooh');
+
+    const traces = [];
+
+    // RIH band (lower hookload = easier to push in)
+    traces.push(band(rihLo.xs, rihHi.xs, rihLo.ys,
+        'rgba(61,90,254,0.15)', `RIH диапазон μ ${muMin}–${muMax}`, '#3d5afe'));
+    // RIH center line
+    traces.push(centerLine(muMid, 'rih', '#3d5afe', `RIH (μ=${res.mu_mid})`, 'dash'));
+
+    // POOH band
+    traces.push(band(poohLo.xs, poohHi.xs, poohLo.ys,
+        'rgba(0,200,83,0.15)', `POOH диапазон μ ${muMin}–${muMax}`, '#00c853'));
+    // POOH center line
+    traces.push(centerLine(muMid, 'pooh', '#00c853', `POOH (μ=${res.mu_mid})`, 'dash'));
+
+    // Packer release band (POOH + packer force)
+    if (pkForce > 0) {
+        const pkForceSI = pkForce;  // already kN
+        const pkForceDisp = fromSI(pkForceSI, 'force');
+
+        const pkLoXs = poohLo.xs.map(x => x + pkForceSI);
+        const pkHiXs = poohHi.xs.map(x => x + pkForceSI);
+        const pkMidXs = pts(muMid, 'pooh').xs.map(x => x + pkForceSI);
+
+        traces.push(band(pkLoXs, pkHiXs, poohLo.ys,
+            'rgba(255,109,0,0.15)', `Срыв пакера диапазон (+${pkForceSI} кН)`, '#ff6d00'));
+        traces.push({
+            x: pkMidXs, y: pts(muMid, 'pooh').ys,
+            type: 'scatter', mode: 'lines',
+            line: { color: '#ff6d00', width: 2, dash: 'dash' },
+            name: `Срыв пакера (μ=${res.mu_mid})`,
+        });
+    }
+
+    // Free rotation (buoyed weight only, no friction) — zero-friction reference
+    const { xs: noFricXs, ys: noFricYs } = pts(muLo, 'rih');
+    // Approximate no-friction as avg of rih/pooh at min mu
+    const avgXs = noFricXs.map((x, i) => (x + poohLo.xs[i]) / 2);
+    traces.push({
+        x: avgXs, y: noFricYs,
+        type: 'scatter', mode: 'lines',
+        line: { color: '#90a4ae', width: 1.5, dash: 'dot' },
+        name: 'Вес без трения (BF)',
+    });
+
+    const xUnit = UNITS[unitSystem].force;
+    _plot('hook-chart', traces, {
+        xaxis: { title: `Нагрузка на крюке (${xUnit})`, zeroline: true, zerolinewidth: 1 },
+        yaxis: { autorange: 'reversed', title: `Глубина (${depthUnit})` },
+        legend: { orientation: 'h', y: -0.18 },
+        margin: { l: 70, r: 20, t: 36, b: 90 },
+    });
 }
 
 
