@@ -39,7 +39,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
         item.classList.add('active');
         document.getElementById('tab-' + item.dataset.tab).classList.add('active');
 
-        if (item.dataset.tab === 'calculations') updatePackerSelect();
+        if (item.dataset.tab === 'calculations') { updatePackerSelect(); syncTdDepth(); }
         if (item.dataset.tab === 'export') updateStatusChecklist();
         if (item.dataset.tab === 'assembly') updateAssemblySummary();
     });
@@ -616,6 +616,237 @@ async function calcHookload() {
 
 
 // ════════════════════════════════════════════════════════════
+// РАСЧЁТ 4 — TORQUE & DRAG
+// ════════════════════════════════════════════════════════════
+
+async function calcTorqueDrag() {
+    const td = parseFloat(document.getElementById('td-target-depth').value);
+    if (!td || td <= 0) { showError('Укажите целевую глубину'); return; }
+
+    const data = collectRequestData(td);
+    if (data.survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
+    if (!data.assembly.length)  { showError('Заполните компоновку'); return; }
+
+    document.getElementById('td-spinner').style.display = '';
+    document.getElementById('btn-calc-td').disabled = true;
+    document.getElementById('td-results').style.display = 'none';
+
+    try {
+        const res = await apiPost('/api/calculate/torque_drag', data);
+
+        if (!res.success) { showError(res.error); return; }
+
+        state.results.torqueDrag = res;
+        document.getElementById('td-results').style.display = '';
+
+        // ── KPI Stats ──
+        const dragWindow = (res.hookload_pooh - res.hookload_rih).toFixed(1);
+        document.getElementById('td-kpi-stats').innerHTML = `
+            <div class="stat-card">
+                <div class="stat-label">Нагрузка на крюке RIH</div>
+                <div class="stat-value">${res.hookload_rih}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Нагрузка на крюке POOH</div>
+                <div class="stat-value">${res.hookload_pooh}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Окно трения (POOH−RIH)</div>
+                <div class="stat-value">${dragWindow}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Момент на устье</div>
+                <div class="stat-value">${res.torque_surface}<span class="stat-unit">кН·м</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Вес в воздухе</div>
+                <div class="stat-value">${res.W_air_kN}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Вес с поправкой BF</div>
+                <div class="stat-value">${res.W_buoy_kN}<span class="stat-unit">кН</span></div>
+            </div>`;
+
+        // ── Совмещённый Drag-график (RIH + POOH) ──
+        const depRih  = res.forces_rih.map(f => f.depth);
+        const fRih    = res.forces_rih.map(f => f.force);
+        const depPooh = res.forces_pooh.map(f => f.depth);
+        const fPooh   = res.forces_pooh.map(f => f.force);
+
+        // Глубины оси — объединяем и сортируем по убыванию
+        const allDepths = [...new Set([...depRih, ...depPooh])].sort((a,b) => b - a);
+        const traceRih = {
+            x: fRih, y: depRih,
+            type: 'scatter', mode: 'lines',
+            line: { color: '#3d5afe', width: 2.5 },
+            name: 'Спуск — RIH',
+            fill: 'none',
+        };
+        const tracePooh = {
+            x: fPooh, y: depPooh,
+            type: 'scatter', mode: 'lines',
+            line: { color: '#00c853', width: 2.5 },
+            name: 'Подъём — POOH',
+        };
+        // Заливка «окно трения»
+        const traceFill = {
+            x: [...fRih, ...fPooh.slice().reverse()],
+            y: [...depRih, ...depPooh.slice().reverse()],
+            type: 'scatter', mode: 'none',
+            fill: 'toself',
+            fillcolor: 'rgba(255,171,0,0.07)',
+            name: 'Окно трения',
+            hoverinfo: 'skip',
+            line: { width: 0 },
+        };
+        const traceZero = {
+            x: [0, 0], y: [Math.max(...depRih, ...depPooh), 0],
+            type: 'scatter', mode: 'lines',
+            line: { color: '#4a4d65', width: 1, dash: 'dash' },
+            name: '0 кН', showlegend: false,
+        };
+
+        const layoutDrag = {
+            ...plotlyLayout,
+            xaxis: { ...plotlyLayout.xaxis, title: 'Осевая нагрузка (кН)',
+                     zeroline: true, zerolinecolor: '#3a3d55', zerolinewidth: 1 },
+            yaxis: { ...plotlyLayout.yaxis, title: 'Глубина (м)' },
+            legend: { x: 0.01, y: 0.01, bgcolor: 'rgba(20,21,31,0.8)',
+                      bordercolor: '#1e2035', font: { color: '#8b8fa8', size: 11 } },
+            height: 360,
+        };
+        Plotly.newPlot('td-drag-chart',
+                       [traceFill, traceRih, tracePooh, traceZero],
+                       layoutDrag, plotlyConfig);
+
+        // ── Torque-график ──
+        const depT = res.torque.map(t => t.depth);
+        const torq = res.torque.map(t => t.torque);
+        const traceTorq = {
+            x: torq, y: depT,
+            type: 'scatter', mode: 'lines+markers',
+            line: { color: '#ffab00', width: 2.5 },
+            marker: { size: 4, color: '#ffab00' },
+            fill: 'tozerox',
+            fillcolor: 'rgba(255,171,0,0.06)',
+            name: 'Момент',
+        };
+        const layoutTorq = {
+            ...plotlyLayout,
+            xaxis: { ...plotlyLayout.xaxis, title: 'Крутящий момент (кН·м)' },
+            yaxis: { ...plotlyLayout.yaxis, title: 'Глубина (м)' },
+            height: 320,
+        };
+        Plotly.newPlot('td-torque-chart', [traceTorq], layoutTorq, plotlyConfig);
+
+        // ── Трение по элементам (горизонтальный bar) ──
+        const segs  = res.segments || [];
+        const names = segs.map(s => s.name);
+        const frRih  = segs.map(s => s.friction_rih);
+        const frPooh = segs.map(s => s.friction_pooh);
+
+        const barRih = {
+            x: frRih, y: names,
+            type: 'bar', orientation: 'h',
+            name: 'Спуск RIH',
+            marker: { color: 'rgba(61,90,254,0.75)' },
+        };
+        const barPooh = {
+            x: frPooh, y: names,
+            type: 'bar', orientation: 'h',
+            name: 'Подъём POOH',
+            marker: { color: 'rgba(0,200,83,0.75)' },
+        };
+        const layoutBar = {
+            ...plotlyLayout,
+            yaxis: { ...plotlyLayout.yaxis, autorange: 'reversed',
+                     title: '', automargin: true },
+            xaxis: { ...plotlyLayout.xaxis, title: 'Сила трения (кН)' },
+            barmode: 'group',
+            height: Math.max(220, segs.length * 32 + 60),
+            margin: { ...plotlyLayout.margin, l: 160 },
+            legend: { x: 0.6, y: 0.99, bgcolor: 'rgba(20,21,31,0.8)',
+                      bordercolor: '#1e2035', font: { color: '#8b8fa8', size: 11 } },
+        };
+        Plotly.newPlot('td-friction-chart', [barRih, barPooh], layoutBar, plotlyConfig);
+
+        // ── Таблица по элементам ──
+        const segTbody = document.getElementById('td-seg-tbody');
+        segTbody.innerHTML = '';
+        segs.forEach(s => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${s.name}</td>
+                <td>${s.top}</td>
+                <td>${s.N}</td>
+                <td>${s.F_rih_top}</td>
+                <td>${s.F_pooh_top}</td>
+                <td>${s.friction_rih}</td>
+                <td>${s.friction_pooh}</td>
+                <td>${s.torque_dT}</td>
+                <td>${s.mu}</td>`;
+            segTbody.appendChild(tr);
+        });
+
+        // ── Продольный изгиб ──
+        const buck = res.buckling || [];
+        const buckDiv = document.getElementById('td-buckling-content');
+        if (!buck.length) {
+            buckDiv.innerHTML = `<div class="result-box success">
+                <span class="result-icon">&#10004;</span>
+                <div class="result-text">
+                    <span class="result-title">Сжатых сегментов не обнаружено</span>
+                    <span class="result-subtitle">Риск потери устойчивости отсутствует при данных условиях</span>
+                </div></div>`;
+        } else {
+            const hasHelical = buck.some(b => b.status === 'helical');
+            const hasSin     = buck.some(b => b.status === 'sinusoidal');
+            const alertClass = hasHelical ? 'error' : hasSin ? 'warning' : 'success';
+            const alertMsg   = hasHelical
+                ? '⚠ Обнаружен спиральный изгиб — требуется пересмотр компоновки'
+                : '⚠ Обнаружен синусоидальный изгиб';
+            let html = `<div class="result-box ${alertClass}" style="margin-bottom:12px">
+                <span class="result-icon">${hasHelical ? '&#9888;' : '&#9888;'}</span>
+                <div class="result-text"><span class="result-title">${alertMsg}</span></div>
+            </div>
+            <div class="table-wrap">
+            <table class="data-table">
+                <thead><tr>
+                    <th>Элемент</th><th>Глубина (м)</th><th>Сжатие (кН)</th>
+                    <th>F_cr_sin (кН)</th><th>F_cr_hel (кН)</th><th>Статус</th>
+                </tr></thead>
+                <tbody>`;
+            const statusLabel = {
+                ok:         '<span class="buck-ok">Норма</span>',
+                sinusoidal: '<span class="buck-sin">Синус. изгиб</span>',
+                helical:    '<span class="buck-hel">⚠ Спир. изгиб</span>',
+            };
+            buck.forEach(b => {
+                const rowClass = b.status === 'helical' ? 'buck-row-hel'
+                               : b.status === 'sinusoidal' ? 'buck-row-sin' : '';
+                html += `<tr class="${rowClass}">
+                    <td>${b.name}</td>
+                    <td>${b.top}–${b.bottom}</td>
+                    <td>${b.compression}</td>
+                    <td>${b.F_cr_sin}</td>
+                    <td>${b.F_cr_hel}</td>
+                    <td>${statusLabel[b.status] || b.status}</td>
+                </tr>`;
+            });
+            html += '</tbody></table></div>';
+            buckDiv.innerHTML = html;
+        }
+
+    } catch(e) {
+        showError('Ошибка T&D: ' + e.message);
+    } finally {
+        document.getElementById('td-spinner').style.display = 'none';
+        document.getElementById('btn-calc-td').disabled = false;
+    }
+}
+
+
+// ════════════════════════════════════════════════════════════
 // ЭКСПОРТ
 // ════════════════════════════════════════════════════════════
 
@@ -623,6 +854,7 @@ function getExportData() {
     const td = parseFloat(document.getElementById('reach-target-depth').value)
             || parseFloat(document.getElementById('hook-target-depth').value)
             || parseFloat(document.getElementById('packer-target-depth').value)
+            || parseFloat(document.getElementById('td-target-depth').value)
             || 0;
     const data = collectRequestData(td);
     data.packer_set_force = parseFloat(document.getElementById('packer-set-force').value) || 0;
@@ -694,6 +926,15 @@ function updateStatusChecklist() {
     setStatus('status-reach', !!state.results.reachability);
     setStatus('status-hook', !!state.results.hookload);
     setStatus('status-packer', !!state.results.packer);
+    setStatus('status-td', !!state.results.torqueDrag);
+}
+
+function syncTdDepth() {
+    // Копируем целевую глубину из расчёта 1 в поле T&D, если пустое
+    const src = document.getElementById('reach-target-depth').value
+             || document.getElementById('hook-target-depth').value;
+    const dst = document.getElementById('td-target-depth');
+    if (src && !dst.value) dst.value = src;
 }
 
 function setStatus(id, done) {

@@ -380,6 +380,85 @@
                             </div>
                         </div>
                     </div>
+                    <!-- РАСЧЁТ 4 — T&D -->
+                    <div class="accordion-item">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div style="display:flex;align-items:center">
+                                <span class="accordion-number">4</span>
+                                <span class="accordion-title">Torque &amp; Drag — полный анализ</span>
+                            </div>
+                            <span class="accordion-chevron">&#9662;</span>
+                        </div>
+                        <div class="accordion-body">
+                            <div class="form-row cols-3">
+                                <div class="form-group">
+                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <input type="number" class="form-input" id="td-target-depth"
+                                           placeholder="3000" step="1" min="0">
+                                </div>
+                            </div>
+                            <div class="btn-group" style="margin-top:8px">
+                                <button class="btn btn-primary" id="btn-calc-td" onclick="calcTorqueDrag()">
+                                    Построить анализ T&amp;D
+                                </button>
+                                <span id="td-spinner" class="spinner" style="display:none"></span>
+                            </div>
+
+                            <div id="td-results" style="display:none;margin-top:20px">
+                                <!-- Сводка KPI -->
+                                <div class="stats-row" id="td-kpi-stats"></div>
+
+                                <!-- Совмещённый Drag-график -->
+                                <div style="margin-top:20px">
+                                    <div class="section-label">Осевые нагрузки: спуск (RIH) и подъём (POOH)</div>
+                                    <div class="chart-hint">Жёлтая зона — «окно трения» (разница RIH / POOH)</div>
+                                    <div class="chart-container" id="td-drag-chart" style="min-height:360px"></div>
+                                </div>
+
+                                <!-- Крутящий момент -->
+                                <div style="margin-top:20px">
+                                    <div class="section-label">Крутящий момент по глубине</div>
+                                    <div class="chart-container" id="td-torque-chart" style="min-height:320px"></div>
+                                </div>
+
+                                <!-- Трение по элементам -->
+                                <div style="margin-top:20px">
+                                    <div class="section-label">Трение по элементам компоновки</div>
+                                    <div class="chart-container" id="td-friction-chart" style="min-height:220px"></div>
+                                </div>
+
+                                <div class="separator"></div>
+
+                                <!-- Таблица по элементам -->
+                                <details class="details-block">
+                                    <summary class="details-summary">Детальная таблица T&amp;D по элементам</summary>
+                                    <div class="table-wrap" style="margin-top:8px">
+                                        <table class="data-table" id="td-seg-table">
+                                            <thead><tr>
+                                                <th>Элемент</th>
+                                                <th>Верх (м)</th>
+                                                <th>N (кН)</th>
+                                                <th>F↓ RIH (кН)</th>
+                                                <th>F↑ POOH (кН)</th>
+                                                <th>Трение↓ (кН)</th>
+                                                <th>Трение↑ (кН)</th>
+                                                <th>ΔT (кН·м)</th>
+                                                <th>μ</th>
+                                            </tr></thead>
+                                            <tbody id="td-seg-tbody"></tbody>
+                                        </table>
+                                    </div>
+                                </details>
+
+                                <!-- Изгиб -->
+                                <div style="margin-top:16px" id="td-buckling-section">
+                                    <div class="section-label" style="margin-bottom:8px">Анализ продольного изгиба</div>
+                                    <div id="td-buckling-content"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                 </div><!-- /accordion -->
             </div>
         </div>
@@ -441,6 +520,10 @@
                             <div class="status-item" id="status-packer">
                                 <span class="status-dot"></span>
                                 Усилие срыва пакера
+                            </div>
+                            <div class="status-item" id="status-td">
+                                <span class="status-dot"></span>
+                                Анализ Torque &amp; Drag
                             </div>
                         </div>
                     </div>

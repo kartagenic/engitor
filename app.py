@@ -1,6 +1,6 @@
 """
 WellMech — Инженерные расчёты механики нефтяных скважин
-Модель Johancsik (1984) для расчёта осевых нагрузок и трения
+Модель Johancsik (1984) — Torque & Drag, доходимость, усилие срыва пакера
 """
 
 import math
@@ -194,12 +194,320 @@ def johancsik_run(assembly, survey, target_depth, fluid_density,
 
 
 # ════════════════════════════════════════════════════════════
+# TORQUE & DRAG — ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ
+# ════════════════════════════════════════════════════════════
+
+def calc_torque_profile(segments):
+    """
+    Крутящий момент по колонне (Johancsik 1984):
+        ΔT(i) = μ(i) × N(i) × r(i)
+    Накапливается снизу вверх — та же нормальная сила N,
+    что при расчёте drag, умножается на радиус трубы.
+
+    segments — список сегментов из johancsik_run (direction='down').
+    Возвращает список {'depth', 'torque', 'element', 'dT'}.
+    """
+    torques = [{'depth': segments[0]['bottom'] if segments else 0,
+                'torque': 0.0, 'element': 'Забой', 'dT': 0.0}]
+    T = 0.0
+    for seg in segments:
+        od_mm = seg.get('od', 0)
+        r = od_mm / 2000.0            # мм → м (радиус)
+        if r < 0.02:
+            r = 0.08                  # запасной радиус ~160 мм
+        dT = seg['mu'] * seg['N'] * r  # кН·м
+        T += dT
+        torques.append({
+            'depth': seg['top'],
+            'torque': round(T, 3),
+            'element': seg['name'],
+            'dT': round(dT, 3),
+        })
+    return torques
+
+
+def calc_buckling(segments_down):
+    """
+    Упрощённый анализ скачкообразного продольного изгиба (sinusoidal buckling).
+
+    Критерий Paslay-Dawson для наклонного участка:
+        F_cr_sin = 2 × √(E·I · w_b·sin(θ) / r_c)
+
+    Для стальных труб E = 207 000 МПа.
+    При отсутствии ID трубы используем типовой t = OD/11.
+    r_c = радиальный зазор ≈ (D_скв - OD) / 2; без данных о диаметре
+          скважины принимаем r_c = 25 мм (1 дюйм).
+
+    Возвращает список словарей со статусом каждого сжатого сегмента.
+    """
+    E_steel = 207_000.0   # МПа
+    r_clearance = 0.025   # м (зазор по умолчанию)
+
+    result = []
+    for seg in segments_down:
+        # Максимальная сжимающая нагрузка в сегменте
+        f_bot = seg['F_bottom']
+        f_top = seg['F_top']
+        f_comp = min(f_bot, f_top)   # отрицательное → сжатие
+        if f_comp >= 0:
+            continue  # нет сжатия — пропускаем
+
+        compression = abs(f_comp)    # кН
+
+        # Геометрия трубы
+        od_m = seg.get('od', 127) / 1000.0   # мм → м
+        t_m = od_m / 11.0                    # типовая толщина стенки
+        id_m = od_m - 2 * t_m
+        # Момент инерции полого сечения (м⁴)
+        I = math.pi * (od_m ** 4 - id_m ** 4) / 64.0
+
+        # Погонный вес (кН/м) × sin(θ) = нормальная нагрузка на 1 м
+        incl_avg = math.radians((seg['incl_bot'] + seg['incl_top']) / 2.0)
+        w_n = seg['W_b'] / seg['length'] * math.sin(incl_avg)  # кН/м
+
+        # Критическая нагрузка синусоидального изгиба (кН)
+        EI_kN = E_steel * 1e6 * I / 1000.0  # МПа·м⁴ → кН·м²
+        if w_n > 0 and r_clearance > 0:
+            F_cr_sin = 2.0 * math.sqrt(EI_kN * w_n / r_clearance)
+        else:
+            F_cr_sin = float('inf')
+
+        # Критическая нагрузка спирального изгиба ≈ 2 × F_cr_sin
+        F_cr_hel = 2.0 * F_cr_sin
+
+        if compression < F_cr_sin:
+            status = 'ok'
+        elif compression < F_cr_hel:
+            status = 'sinusoidal'
+        else:
+            status = 'helical'
+
+        result.append({
+            'name': seg['name'],
+            'top': seg['top'],
+            'bottom': seg['bottom'],
+            'compression': round(compression, 2),
+            'F_cr_sin': round(F_cr_sin, 2),
+            'F_cr_hel': round(F_cr_hel, 2),
+            'status': status,
+            'incl_avg': round(math.degrees(incl_avg), 1),
+        })
+
+    return result
+
+
+# ════════════════════════════════════════════════════════════
+# MATPLOTLIB — ВСПОМОГАТЕЛЬНЫЕ ГРАФИКИ ДЛЯ PDF
+# ════════════════════════════════════════════════════════════
+
+def _td_drag_chart(forces_down, forces_up, title='Осевые нагрузки (T&D)'):
+    """Совмещённый график RIH / POOH."""
+    depths_d = [f['depth'] for f in forces_down]
+    rih = [f['force'] for f in forces_down]
+    depths_u = [f['depth'] for f in forces_up]
+    pooh = [f['force'] for f in forces_up]
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    fig.patch.set_facecolor('#14151f')
+    ax.set_facecolor('#0a0b12')
+
+    ax.fill_betweenx(depths_d, rih, pooh, alpha=0.10, color='#ffab00')
+    ax.plot(rih, depths_d, color='#3d5afe', lw=2, label='Спуск (RIH)')
+    ax.plot(pooh, depths_u, color='#00c853', lw=2, label='Подъём (POOH)')
+    ax.axvline(0, color='#4a4d65', lw=1, ls='--', label='0 кН')
+
+    ax.invert_yaxis()
+    ax.set_xlabel('Осевая нагрузка (кН)', color='#8b8fa8', fontsize=9)
+    ax.set_ylabel('Глубина (м)',           color='#8b8fa8', fontsize=9)
+    ax.set_title(title, color='#e8eaf0', fontsize=11, pad=8)
+    ax.tick_params(colors='#8b8fa8', labelsize=8)
+    ax.grid(True, color='#1e2035', lw=0.5)
+    for sp in ax.spines.values():
+        sp.set_color('#1e2035')
+    leg = ax.legend(facecolor='#14151f', edgecolor='#1e2035',
+                    labelcolor='#8b8fa8', fontsize=8)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def _td_torque_chart(torque_profile, title='Крутящий момент'):
+    depths = [t['depth'] for t in torque_profile]
+    torqs = [t['torque'] for t in torque_profile]
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    fig.patch.set_facecolor('#14151f')
+    ax.set_facecolor('#0a0b12')
+
+    ax.plot(torqs, depths, color='#ffab00', lw=2, label='Момент')
+    ax.fill_betweenx(depths, torqs, alpha=0.09, color='#ffab00')
+
+    ax.invert_yaxis()
+    ax.set_xlabel('Крутящий момент (кН·м)', color='#8b8fa8', fontsize=9)
+    ax.set_ylabel('Глубина (м)',             color='#8b8fa8', fontsize=9)
+    ax.set_title(title, color='#e8eaf0', fontsize=11, pad=8)
+    ax.tick_params(colors='#8b8fa8', labelsize=8)
+    ax.grid(True, color='#1e2035', lw=0.5)
+    for sp in ax.spines.values():
+        sp.set_color('#1e2035')
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def _td_friction_chart(segments_down, segments_up):
+    """Распределение трения по элементам (горизонтальный bar chart)."""
+    names   = [s['name'] for s in segments_down]
+    f_down  = [s['friction'] for s in segments_down]
+    f_up    = [s['friction'] for s in segments_up]
+    y = list(range(len(names)))
+
+    fig, ax = plt.subplots(figsize=(7, max(3, len(names) * 0.5 + 1)))
+    fig.patch.set_facecolor('#14151f')
+    ax.set_facecolor('#0a0b12')
+
+    bar_h = 0.35
+    ax.barh([yi + bar_h/2 for yi in y], f_down, bar_h,
+            color='#3d5afe', alpha=0.85, label='Спуск')
+    ax.barh([yi - bar_h/2 for yi in y], f_up, bar_h,
+            color='#00c853', alpha=0.85, label='Подъём')
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(names, fontsize=8, color='#8b8fa8')
+    ax.set_xlabel('Сила трения (кН)', color='#8b8fa8', fontsize=9)
+    ax.set_title('Трение по элементам компоновки', color='#e8eaf0', fontsize=11, pad=8)
+    ax.tick_params(colors='#8b8fa8', labelsize=8)
+    ax.grid(True, axis='x', color='#1e2035', lw=0.5)
+    for sp in ax.spines.values():
+        sp.set_color('#1e2035')
+    leg = ax.legend(facecolor='#14151f', edgecolor='#1e2035',
+                    labelcolor='#8b8fa8', fontsize=8)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=150, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+# ════════════════════════════════════════════════════════════
 # FLASK МАРШРУТЫ
 # ════════════════════════════════════════════════════════════
 
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/api/calculate/torque_drag', methods=['POST'])
+def calc_torque_drag():
+    """
+    Полный анализ Torque & Drag:
+      - Осевые нагрузки при спуске (RIH)
+      - Осевые нагрузки при подъёме (POOH)
+      - Профиль крутящего момента
+      - Анализ продольного изгиба
+    """
+    try:
+        data = request.get_json()
+        survey        = data['survey']
+        assembly      = data['assembly']
+        target_depth  = float(data['target_depth'])
+        fluid_density = float(data['fluid_density'])
+        mu_default    = float(data.get('mu_default', 0.25))
+        mu_intervals  = data.get('mu_intervals', [])
+
+        validate_survey(survey)
+        validate_assembly(assembly)
+
+        total_len = sum(e['length'] for e in assembly)
+        if total_len > target_depth:
+            raise ValueError(
+                f"Суммарная длина компоновки ({total_len:.1f} м) "
+                f"превышает целевую глубину ({target_depth:.1f} м)")
+
+        # ── Осевые нагрузки ──────────────────────────────
+        forces_rih, segs_rih = johancsik_run(
+            assembly, survey, target_depth, fluid_density,
+            mu_default, mu_intervals, direction='down')
+
+        forces_pooh, segs_pooh = johancsik_run(
+            assembly, survey, target_depth, fluid_density,
+            mu_default, mu_intervals, direction='up')
+
+        # ── Крутящий момент ───────────────────────────────
+        torque_profile = calc_torque_profile(segs_rih)
+
+        # ── Продольный изгиб ──────────────────────────────
+        buckling = calc_buckling(segs_rih)
+
+        # ── Агрегированные показатели ─────────────────────
+        bf = 1.0 - fluid_density / STEEL_DENSITY
+        W_air_kN  = sum(e['weight_air'] for e in assembly) * G / 1000.0
+        W_buoy_kN = W_air_kN * bf
+
+        hookload_rih  = forces_rih[-1]['force']  if forces_rih  else 0.0
+        hookload_pooh = forces_pooh[-1]['force'] if forces_pooh else 0.0
+        torque_surf   = torque_profile[-1]['torque'] if torque_profile else 0.0
+
+        total_drag_rih  = sum(s['friction'] for s in segs_rih)
+        total_drag_pooh = sum(s['friction'] for s in segs_pooh)
+        drag_factor = ((hookload_pooh - hookload_rih) / (2.0 * W_buoy_kN)
+                       if W_buoy_kN > 0 else 0.0)
+
+        # Совмещённая таблица по элементам
+        segments_combined = []
+        for i, s in enumerate(segs_rih):
+            sp = segs_pooh[i] if i < len(segs_pooh) else {}
+            od_mm = s.get('od', 0)
+            r = od_mm / 2000.0 if od_mm > 0 else 0.08
+            dT = s['mu'] * s['N'] * r
+            segments_combined.append({
+                'name':        s['name'],
+                'top':         s['top'],
+                'bottom':      s['bottom'],
+                'incl_top':    s['incl_top'],
+                'W_b':         s['W_b'],
+                'N':           s['N'],
+                'mu':          s['mu'],
+                'F_rih_top':   s['F_top'],
+                'F_pooh_top':  sp.get('F_top', 0),
+                'friction_rih':  s['friction'],
+                'friction_pooh': sp.get('friction', 0),
+                'torque_dT':   round(dT, 3),
+                'od':          od_mm,
+            })
+
+        return jsonify(
+            success=True,
+            forces_rih=forces_rih,
+            forces_pooh=forces_pooh,
+            torque=torque_profile,
+            buckling=buckling,
+            hookload_rih=round(hookload_rih, 2),
+            hookload_pooh=round(hookload_pooh, 2),
+            torque_surface=round(torque_surf, 2),
+            total_drag_rih=round(total_drag_rih, 2),
+            total_drag_pooh=round(total_drag_pooh, 2),
+            drag_factor=round(drag_factor, 3),
+            W_air_kN=round(W_air_kN, 2),
+            W_buoy_kN=round(W_buoy_kN, 2),
+            segments=segments_combined,
+        )
+
+    except (ValueError, KeyError) as e:
+        return jsonify(success=False, error=str(e))
+    except Exception as e:
+        return jsonify(success=False, error=f"Ошибка расчёта T&D: {e}")
 
 
 @app.route('/api/survey/upload', methods=['POST'])
@@ -459,183 +767,307 @@ def _make_chart_image(forces, title, ylabel='Осевая нагрузка (кН
 
 @app.route('/api/export/pdf', methods=['POST'])
 def export_pdf():
-    """Сгенерировать PDF-отчёт."""
+    """Полный PDF-отчёт: входные данные + Torque & Drag + доходимость + пакер."""
     try:
         data = request.get_json()
-        survey = data.get('survey', [])
-        assembly = data.get('assembly', [])
-        target_depth = float(data.get('target_depth', 0))
-        fluid_density = float(data.get('fluid_density', 1.2))
-        mu_default = float(data.get('mu_default', 0.25))
-        mu_intervals = data.get('mu_intervals', [])
+        survey           = data.get('survey', [])
+        assembly         = data.get('assembly', [])
+        target_depth     = float(data.get('target_depth', 0))
+        fluid_density    = float(data.get('fluid_density', 1.2))
+        mu_default       = float(data.get('mu_default', 0.25))
+        mu_intervals     = data.get('mu_intervals', [])
         packer_set_force = float(data.get('packer_set_force', 0))
-        packer_idx = int(data.get('packer_element_index', 0))
+        packer_idx       = int(data.get('packer_element_index', 0))
 
         buf = io.BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=A4,
-                                leftMargin=20 * mm, rightMargin=20 * mm,
-                                topMargin=20 * mm, bottomMargin=20 * mm)
+                                leftMargin=18*mm, rightMargin=18*mm,
+                                topMargin=18*mm, bottomMargin=18*mm)
 
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle('TitleRu', parent=styles['Title'],
-                                     fontSize=18, spaceAfter=6)
-        h2 = ParagraphStyle('H2Ru', parent=styles['Heading2'],
-                            fontSize=13, spaceAfter=4, spaceBefore=12)
-        body = ParagraphStyle('BodyRu', parent=styles['Normal'], fontSize=9)
+        styles  = getSampleStyleSheet()
+        h1_s    = ParagraphStyle('h1', parent=styles['Title'],   fontSize=17, spaceAfter=4)
+        h2_s    = ParagraphStyle('h2', parent=styles['Heading2'],fontSize=12, spaceBefore=10, spaceAfter=4)
+        h3_s    = ParagraphStyle('h3', parent=styles['Heading3'],fontSize=10, spaceBefore=6, spaceAfter=3)
+        body_s  = ParagraphStyle('bo', parent=styles['Normal'],  fontSize=8)
+        ok_s    = ParagraphStyle('ok', parent=styles['Normal'],  fontSize=9,
+                                 textColor=rl_colors.HexColor('#006400'))
+        err_s   = ParagraphStyle('er', parent=styles['Normal'],  fontSize=9,
+                                 textColor=rl_colors.HexColor('#b20000'))
+        warn_s  = ParagraphStyle('wa', parent=styles['Normal'],  fontSize=9,
+                                 textColor=rl_colors.HexColor('#7a5400'))
 
-        hdr_color = rl_colors.HexColor('#1a3a5c')
-        hdr_text = rl_colors.white
-        alt_row = rl_colors.HexColor('#f0f4f8')
+        HC = rl_colors.HexColor
+        hdr_fill  = HC('#1a3a5c')
+        hdr_text  = rl_colors.white
+        alt_row   = HC('#f2f6fb')
+        warn_fill = HC('#fff3cd')
+        err_fill  = HC('#fce8e8')
 
-        elements = []
+        def _tbl(data_rows, col_widths, alt=True):
+            t = Table(data_rows, colWidths=col_widths, repeatRows=1)
+            style = [
+                ('BACKGROUND', (0,0), (-1,0), hdr_fill),
+                ('TEXTCOLOR',  (0,0), (-1,0), hdr_text),
+                ('FONTSIZE',   (0,0), (-1,-1), 7),
+                ('GRID',       (0,0), (-1,-1), 0.35, HC('#cccccc')),
+                ('VALIGN',     (0,0), (-1,-1), 'MIDDLE'),
+            ]
+            if alt:
+                style.append(('ROWBACKGROUNDS', (0,1), (-1,-1),
+                               [rl_colors.white, alt_row]))
+            t.setStyle(TableStyle(style))
+            return t
 
-        # ── Заголовок ──
-        elements.append(Paragraph("РАСЧЁТ МЕХАНИКИ НЕФТЯНОЙ СКВАЖИНЫ", title_style))
-        elements.append(Paragraph(
-            f"Дата: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}", body))
-        elements.append(Spacer(1, 8 * mm))
+        els = []
 
-        # ── Параметры ──
-        elements.append(Paragraph("1. Параметры скважины", h2))
-        params_data = [
-            ['Параметр', 'Значение'],
-            ['Целевая глубина', f'{target_depth} м'],
-            ['Плотность раствора', f'{fluid_density} г/см³'],
-            ['Коэф. трения (по умолч.)', str(mu_default)],
+        # ═══════════════════════════════════════════════════
+        # ТИТУЛЬНАЯ СТРАНИЦА
+        # ═══════════════════════════════════════════════════
+        els.append(Spacer(1, 20*mm))
+        els.append(Paragraph("ОТЧЁТ О РАСЧЁТЕ МЕХАНИКИ<br/>НЕФТЯНОЙ СКВАЖИНЫ", h1_s))
+        els.append(Spacer(1, 6*mm))
+        els.append(Paragraph(
+            f"Torque &amp; Drag — модель Johancsik (1984)", body_s))
+        els.append(Paragraph(
+            f"Дата формирования: {datetime.datetime.now().strftime('%d.%m.%Y %H:%M')}", body_s))
+        els.append(Spacer(1, 10*mm))
+
+        params = [
+            ['Параметр',                       'Значение'],
+            ['Целевая глубина',                 f'{target_depth} м'],
+            ['Плотность бурового раствора',     f'{fluid_density} г/см³'],
+            ['Коэф. трения (по умолчанию)',      str(mu_default)],
+            ['Количество точек инклинометрии',  str(len(survey))],
+            ['Элементов в компоновке',          str(len(assembly))],
         ]
-        t = Table(params_data, colWidths=[120 * mm, 50 * mm])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), hdr_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), hdr_text),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.5, rl_colors.HexColor('#cccccc')),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, alt_row]),
-        ]))
-        elements.append(t)
-        elements.append(Spacer(1, 4 * mm))
+        els.append(_tbl(params, [110*mm, 60*mm]))
+        els.append(PageBreak())
 
-        # ── Инклинометрия ──
+        # ═══════════════════════════════════════════════════
+        # РАЗДЕЛ 1: ИНКЛИНОМЕТРИЯ
+        # ═══════════════════════════════════════════════════
+        els.append(Paragraph("1. Инклинометрия скважины", h2_s))
         if survey:
-            elements.append(Paragraph("Инклинометрия", h2))
-            s_data = [['Глубина (м)', 'Зенитный угол (°)', 'Азимут (°)']]
-            for s in survey[:50]:
-                s_data.append([str(s['depth']), str(s['inclination']), str(s['azimuth'])])
-            t = Table(s_data, colWidths=[56 * mm, 56 * mm, 56 * mm])
-            t.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), hdr_color),
-                ('TEXTCOLOR', (0, 0), (-1, 0), hdr_text),
-                ('FONTSIZE', (0, 0), (-1, -1), 7),
-                ('GRID', (0, 0), (-1, -1), 0.4, rl_colors.HexColor('#cccccc')),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, alt_row]),
-            ]))
-            elements.append(t)
-            elements.append(Spacer(1, 4 * mm))
+            s_rows = [['Глубина (м)', 'Зенитный угол (°)', 'Азимут (°)']]
+            for s in survey[:80]:
+                s_rows.append([str(s['depth']), str(s['inclination']), str(s['azimuth'])])
+            if len(survey) > 80:
+                s_rows.append(['...', f'({len(survey)} точек всего)', ''])
+            els.append(_tbl(s_rows, [60*mm, 60*mm, 52*mm]))
+        els.append(Spacer(1, 4*mm))
 
-        # ── Компоновка ──
+        # ═══════════════════════════════════════════════════
+        # РАЗДЕЛ 2: КОМПОНОВКА
+        # ═══════════════════════════════════════════════════
+        els.append(Paragraph("2. Компоновка низа бурильной колонны (от забоя к устью)", h2_s))
         if assembly:
-            elements.append(Paragraph("2. Компоновка (от забоя к устью)", h2))
-            a_data = [['Элемент', 'Длина (м)', 'Вес (кг)', 'OD (мм)', 'Макс. (кН)']]
+            a_rows = [['Элемент', 'Длина (м)', 'Вес (кг)', 'OD (мм)', 'Макс. нагрузка (кН)']]
             for e in assembly:
-                a_data.append([
-                    e.get('name', ''), str(e['length']),
-                    str(e['weight_air']), str(e.get('od', '')),
-                    str(e.get('max_load', '')),
-                ])
-            cw = [55 * mm, 25 * mm, 25 * mm, 28 * mm, 28 * mm]
-            t = Table(a_data, colWidths=cw)
-            t.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), hdr_color),
-                ('TEXTCOLOR', (0, 0), (-1, 0), hdr_text),
-                ('FONTSIZE', (0, 0), (-1, -1), 7),
-                ('GRID', (0, 0), (-1, -1), 0.4, rl_colors.HexColor('#cccccc')),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, alt_row]),
-            ]))
-            elements.append(t)
-            elements.append(Spacer(1, 4 * mm))
+                a_rows.append([e.get('name',''), str(e['length']),
+                               str(e['weight_air']), str(e.get('od','')),
+                               str(e.get('max_load',''))])
+            els.append(_tbl(a_rows, [55*mm, 22*mm, 25*mm, 27*mm, 35*mm]))
 
-        # ── Расчёт доходимости ──
+            bf = 1.0 - fluid_density / STEEL_DENSITY
+            W_air  = sum(e['weight_air'] for e in assembly) * G / 1000.0
+            W_buoy = W_air * bf
+            els.append(Spacer(1, 2*mm))
+            els.append(Paragraph(
+                f"Вес в воздухе: {W_air:.1f} кН  |  "
+                f"Вес с архимедовой поправкой: {W_buoy:.1f} кН  |  "
+                f"Коэф. Архимеда BF = {bf:.3f}", body_s))
+        els.append(PageBreak())
+
+        # ═══════════════════════════════════════════════════
+        # РАЗДЕЛ 3: TORQUE & DRAG
+        # ═══════════════════════════════════════════════════
+        els.append(Paragraph("3. Анализ Torque &amp; Drag", h2_s))
+
         if survey and assembly and target_depth > 0:
-            elements.append(Paragraph("3. Доходимость до целевой глубины (спуск)", h2))
             try:
                 forces_d, segs_d = johancsik_run(
                     assembly, survey, target_depth, fluid_density,
                     mu_default, mu_intervals, direction='down')
-                reaches = all(f['force'] >= 0 for f in forces_d)
-                crit = next((f['depth'] for f in forces_d if f['force'] < 0), None)
-                status = "ДОХОДИТ" if reaches else f"НЕ ДОХОДИТ (крит. глубина {crit} м)"
-                elements.append(Paragraph(f"Результат: {status}", body))
-                elements.append(Spacer(1, 2 * mm))
-
-                chart_buf = _make_chart_image(forces_d, 'Осевая нагрузка при спуске')
-                elements.append(Image(chart_buf, width=160 * mm, height=86 * mm))
-                elements.append(Spacer(1, 4 * mm))
-
-                fd = [['Глубина (м)', 'Элемент', 'Сила (кН)', 'Трение (кН)']]
-                for fp in forces_d:
-                    fd.append([str(fp['depth']), fp['element'],
-                               str(fp['force']), str(fp['friction'])])
-                t = Table(fd, colWidths=[35 * mm, 50 * mm, 35 * mm, 35 * mm])
-                t.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), hdr_color),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), hdr_text),
-                    ('FONTSIZE', (0, 0), (-1, -1), 7),
-                    ('GRID', (0, 0), (-1, -1), 0.4, rl_colors.HexColor('#cccccc')),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [rl_colors.white, alt_row]),
-                ]))
-                elements.append(t)
-            except Exception as e:
-                elements.append(Paragraph(f"Ошибка: {e}", body))
-
-            elements.append(Spacer(1, 6 * mm))
-
-            # ── Вес на крюке ──
-            elements.append(Paragraph("4. Вес на крюке при подъёме", h2))
-            try:
                 forces_u, segs_u = johancsik_run(
                     assembly, survey, target_depth, fluid_density,
                     mu_default, mu_intervals, direction='up')
-                hl = forces_u[-1]['force'] if forces_u else 0
-                elements.append(Paragraph(f"Вес на крюке: {hl:.2f} кН", body))
-                elements.append(Spacer(1, 2 * mm))
+                torque_prof = calc_torque_profile(segs_d)
+                buckling    = calc_buckling(segs_d)
 
-                chart_buf2 = _make_chart_image(forces_u, 'Вес на крюке при подъёме')
-                elements.append(Image(chart_buf2, width=160 * mm, height=86 * mm))
-                elements.append(Spacer(1, 4 * mm))
+                hl_rih  = forces_d[-1]['force']  if forces_d  else 0.0
+                hl_pooh = forces_u[-1]['force']  if forces_u  else 0.0
+                torq_s  = torque_prof[-1]['torque'] if torque_prof else 0.0
+                drag_sum_rih  = sum(s['friction'] for s in segs_d)
+                drag_sum_pooh = sum(s['friction'] for s in segs_u)
+
+                els.append(Paragraph("3.1 Сводные показатели", h3_s))
+                kpi = [
+                    ['Показатель', 'Значение'],
+                    ['Нагрузка на крюке при спуске (RIH)',     f'{hl_rih:.2f} кН'],
+                    ['Нагрузка на крюке при подъёме (POOH)',   f'{hl_pooh:.2f} кН'],
+                    ['Крутящий момент на устье',                f'{torq_s:.2f} кН·м'],
+                    ['Суммарное трение при спуске',             f'{drag_sum_rih:.2f} кН'],
+                    ['Суммарное трение при подъёме',            f'{drag_sum_pooh:.2f} кН'],
+                    ['Разница RIH / POOH (окно трения)',        f'{(hl_pooh - hl_rih):.2f} кН'],
+                ]
+                els.append(_tbl(kpi, [110*mm, 60*mm]))
+                els.append(Spacer(1, 4*mm))
+
+                # График 1: Совмещённый T&D (RIH + POOH)
+                els.append(Paragraph("3.2 Профили осевых нагрузок (Drag)", h3_s))
+                drag_img = _td_drag_chart(forces_d, forces_u)
+                els.append(Image(drag_img, width=165*mm, height=95*mm))
+                els.append(Spacer(1, 4*mm))
+
+                # График 2: Крутящий момент
+                els.append(Paragraph("3.3 Профиль крутящего момента", h3_s))
+                torq_img = _td_torque_chart(torque_prof)
+                els.append(Image(torq_img, width=165*mm, height=88*mm))
+                els.append(Spacer(1, 4*mm))
+
+                # График 3: Трение по элементам
+                els.append(Paragraph("3.4 Трение по элементам компоновки", h3_s))
+                fric_img = _td_friction_chart(segs_d, segs_u)
+                els.append(Image(fric_img, width=165*mm, height=max(60, len(segs_d)*14+20)*mm))
+                els.append(Spacer(1, 4*mm))
+
+                # Таблица по элементам
+                els.append(Paragraph("3.5 Результаты по элементам", h3_s))
+                seg_hdr = ['Элемент', 'Глубина\nверха (м)', 'F_RIH (кН)',
+                           'F_POOH (кН)', 'N (кН)', 'Трение↓\n(кН)',
+                           'Трение↑\n(кН)', 'Момент ΔT\n(кН·м)']
+                seg_rows = [seg_hdr]
+                for i, s in enumerate(segs_d):
+                    sp_ = segs_u[i] if i < len(segs_u) else {}
+                    od = s.get('od', 0); r = od/2000 if od > 0 else 0.08
+                    dT = s['mu'] * s['N'] * r
+                    seg_rows.append([
+                        s['name'], str(s['top']),
+                        str(s['F_top']), str(sp_.get('F_top', '—')),
+                        str(s['N']), str(s['friction']),
+                        str(sp_.get('friction', '—')),
+                        f"{dT:.3f}",
+                    ])
+                els.append(_tbl(seg_rows,
+                                [38*mm,17*mm,17*mm,18*mm,14*mm,14*mm,14*mm,16*mm]))
+                els.append(Spacer(1, 4*mm))
+
+                # Продольный изгиб
+                els.append(Paragraph("3.6 Анализ продольного изгиба", h3_s))
+                if not buckling:
+                    els.append(Paragraph("✓ Сжатых сегментов не обнаружено — "
+                                         "риск потери устойчивости отсутствует.", ok_s))
+                else:
+                    status_map = {
+                        'ok':         ('ОК — ниже порога синус. изгиба', ok_s),
+                        'sinusoidal': ('СИНУСОИДАЛЬНЫЙ ИЗГИБ',           warn_s),
+                        'helical':    ('⚠ СПИРАЛЬНЫЙ ИЗГИБ',             err_s),
+                    }
+                    b_hdr = ['Элемент', 'Глубина (м)', 'Сжатие (кН)',
+                             'F_cr_sin (кН)', 'F_cr_hel (кН)', 'Статус']
+                    b_rows = [b_hdr]
+                    for b in buckling:
+                        b_rows.append([
+                            b['name'],
+                            f"{b['top']}–{b['bottom']}",
+                            str(b['compression']),
+                            str(b['F_cr_sin']),
+                            str(b['F_cr_hel']),
+                            status_map.get(b['status'], (b['status'], body_s))[0],
+                        ])
+                    bt = _tbl(b_rows, [40*mm, 28*mm, 24*mm, 24*mm, 24*mm, 32*mm])
+                    # Подсветка строк
+                    for ri, b in enumerate(buckling, start=1):
+                        if b['status'] == 'sinusoidal':
+                            bt._cellvalues  # force build
+                            bt.setStyle(TableStyle(
+                                [('BACKGROUND', (0,ri), (-1,ri), warn_fill)]))
+                        elif b['status'] == 'helical':
+                            bt.setStyle(TableStyle(
+                                [('BACKGROUND', (0,ri), (-1,ri), err_fill)]))
+                    els.append(bt)
+
             except Exception as e:
-                elements.append(Paragraph(f"Ошибка: {e}", body))
+                els.append(Paragraph(f"Ошибка расчёта T&D: {e}", err_s))
 
-            # ── Пакер ──
-            if packer_set_force > 0 and packer_idx < len(assembly):
-                elements.append(Paragraph("5. Усилие срыва пакера", h2))
-                try:
-                    packer_top = target_depth - sum(
-                        assembly[j]['length'] for j in range(packer_idx + 1))
-                    aa = assembly[packer_idx + 1:]
-                    if aa:
-                        fp, sp = johancsik_run(
-                            aa, survey, packer_top, fluid_density,
-                            mu_default, mu_intervals, direction='up',
-                            initial_force=packer_set_force)
-                        hl_p = fp[-1]['force'] if fp else packer_set_force
-                        elements.append(Paragraph(
-                            f"Нагрузка на крюке для срыва: {hl_p:.2f} кН", body))
+        els.append(PageBreak())
 
-                        weakest_name = ''
-                        weakest_load = float('inf')
-                        for s in sp:
-                            if s['max_load'] < weakest_load:
-                                weakest_load = s['max_load']
-                                weakest_name = s['name']
-                        f_max = max(abs(s['F_top']) for s in sp) if sp else 0
-                        safety = weakest_load / f_max * 100 if f_max > 0 else 9999
-                        elements.append(Paragraph(
-                            f"Слабейший элемент: {weakest_name} "
-                            f"({weakest_load:.1f} кН), "
-                            f"запас прочности: {safety:.1f}%", body))
-                except Exception as e:
-                    elements.append(Paragraph(f"Ошибка: {e}", body))
+        # ═══════════════════════════════════════════════════
+        # РАЗДЕЛ 4: ДОХОДИМОСТЬ
+        # ═══════════════════════════════════════════════════
+        els.append(Paragraph("4. Доходимость до целевой глубины", h2_s))
+        if survey and assembly and target_depth > 0:
+            try:
+                forces_d2, _ = johancsik_run(
+                    assembly, survey, target_depth, fluid_density,
+                    mu_default, mu_intervals, direction='down')
+                reaches = all(f['force'] >= 0 for f in forces_d2)
+                crit    = next((f['depth'] for f in forces_d2 if f['force'] < 0), None)
+                if reaches:
+                    els.append(Paragraph(
+                        f"✓ КОМПОНОВКА ДОХОДИТ до глубины {target_depth} м", ok_s))
+                else:
+                    els.append(Paragraph(
+                        f"✗ КОМПОНОВКА НЕ ДОХОДИТ. "
+                        f"Критическая глубина: {crit} м", err_s))
+                els.append(Spacer(1, 3*mm))
+                chart_reach = _make_chart_image(forces_d2, 'Осевая нагрузка при спуске')
+                els.append(Image(chart_reach, width=165*mm, height=85*mm))
+            except Exception as e:
+                els.append(Paragraph(f"Ошибка: {e}", err_s))
 
-        doc.build(elements)
+        els.append(Spacer(1, 6*mm))
+
+        # ═══════════════════════════════════════════════════
+        # РАЗДЕЛ 5: ВЕС НА КРЮКЕ
+        # ═══════════════════════════════════════════════════
+        els.append(Paragraph("5. Вес на крюке при подъёме (POOH)", h2_s))
+        if survey and assembly and target_depth > 0:
+            try:
+                forces_u2, _ = johancsik_run(
+                    assembly, survey, target_depth, fluid_density,
+                    mu_default, mu_intervals, direction='up')
+                hl = forces_u2[-1]['force'] if forces_u2 else 0
+                els.append(Paragraph(f"Нагрузка на крюке: {hl:.2f} кН", body_s))
+                els.append(Spacer(1, 2*mm))
+                chart_hook = _make_chart_image(forces_u2, 'Вес на крюке при подъёме')
+                els.append(Image(chart_hook, width=165*mm, height=85*mm))
+            except Exception as e:
+                els.append(Paragraph(f"Ошибка: {e}", err_s))
+
+        # ═══════════════════════════════════════════════════
+        # РАЗДЕЛ 6: ПАКЕР
+        # ═══════════════════════════════════════════════════
+        if packer_set_force > 0 and assembly and packer_idx < len(assembly):
+            els.append(Spacer(1, 6*mm))
+            els.append(Paragraph("6. Усилие срыва пакера", h2_s))
+            try:
+                packer_top = target_depth - sum(
+                    assembly[j]['length'] for j in range(packer_idx + 1))
+                aa = assembly[packer_idx + 1:]
+                if aa:
+                    fp, sp2 = johancsik_run(
+                        aa, survey, packer_top, fluid_density,
+                        mu_default, mu_intervals, direction='up',
+                        initial_force=packer_set_force)
+                    hl_p = fp[-1]['force'] if fp else packer_set_force
+                    wk_name, wk_load = '', float('inf')
+                    for s in sp2:
+                        if s['max_load'] < wk_load:
+                            wk_load, wk_name = s['max_load'], s['name']
+                    f_max   = max(abs(s['F_top']) for s in sp2) if sp2 else 0
+                    safety  = wk_load / f_max * 100 if f_max > 0 else 9999
+                    is_safe = f_max <= wk_load
+                    pstyle  = ok_s if is_safe else err_s
+                    els.append(Paragraph(
+                        f"{'✓' if is_safe else '✗'} "
+                        f"Нагрузка на крюке для срыва: {hl_p:.2f} кН  |  "
+                        f"Слабейший элемент: {wk_name} ({wk_load:.1f} кН)  |  "
+                        f"Запас прочности: {safety:.1f}%", pstyle))
+            except Exception as e:
+                els.append(Paragraph(f"Ошибка: {e}", err_s))
+
+        doc.build(els)
         buf.seek(0)
         return send_file(buf, as_attachment=True,
                          download_name='wellmech_report.pdf',
@@ -758,6 +1190,69 @@ def export_excel():
                                     round(safety, 1)])
                     for col in ws5.columns:
                         ws5.column_dimensions[col[0].column_letter].width = 22
+
+            # ── Лист «T&D» — полный анализ Torque & Drag ──
+            forces_td_d, segs_td_d = johancsik_run(
+                assembly, survey, target_depth, fluid_density,
+                mu_default, mu_intervals, direction='down')
+            forces_td_u, segs_td_u = johancsik_run(
+                assembly, survey, target_depth, fluid_density,
+                mu_default, mu_intervals, direction='up')
+            torque_pr = calc_torque_profile(segs_td_d)
+            buckling  = calc_buckling(segs_td_d)
+
+            ws_td = wb.create_sheet('T&D по элементам')
+            ht = ['Элемент', 'Верх (м)', 'Низ (м)',
+                  'N (кН)', 'F_RIH верх (кН)', 'F_POOH верх (кН)',
+                  'Трение RIH (кН)', 'Трение POOH (кН)',
+                  'ΔT крут. момент (кН·м)', 'μ']
+            ws_td.append(ht)
+            _style_header(ws_td, 1, len(ht))
+            for i, s in enumerate(segs_td_d):
+                sp_ = segs_td_u[i] if i < len(segs_td_u) else {}
+                od  = s.get('od', 0); r = od/2000 if od > 0 else 0.08
+                dT  = s['mu'] * s['N'] * r
+                ws_td.append([
+                    s['name'], s['top'], s['bottom'],
+                    s['N'], s['F_top'], sp_.get('F_top', ''),
+                    s['friction'], sp_.get('friction', ''),
+                    round(dT, 3), s['mu'],
+                ])
+            for col in ws_td.columns:
+                ws_td.column_dimensions[col[0].column_letter].width = 18
+
+            ws_torq = wb.create_sheet('Крутящий момент')
+            ht2 = ['Глубина (м)', 'Элемент', 'Момент (кН·м)', 'ΔT (кН·м)']
+            ws_torq.append(ht2)
+            _style_header(ws_torq, 1, len(ht2))
+            for tp in torque_pr:
+                ws_torq.append([tp['depth'], tp['element'],
+                                tp['torque'], tp['dT']])
+            for col in ws_torq.columns:
+                ws_torq.column_dimensions[col[0].column_letter].width = 20
+
+            if buckling:
+                ws_bk = wb.create_sheet('Продольный изгиб')
+                hb = ['Элемент', 'Верх (м)', 'Низ (м)',
+                      'Сжатие (кН)', 'F_cr_sin (кН)', 'F_cr_hel (кН)', 'Статус']
+                ws_bk.append(hb)
+                _style_header(ws_bk, 1, len(hb))
+                status_ru = {
+                    'ok': 'Норма', 'sinusoidal': 'Синус. изгиб', 'helical': 'Спир. изгиб'}
+                yellow = PatternFill('solid', fgColor='FFF3CD')
+                red    = PatternFill('solid', fgColor='FCE8E8')
+                for ri, b in enumerate(buckling, start=2):
+                    ws_bk.append([b['name'], b['top'], b['bottom'],
+                                  b['compression'], b['F_cr_sin'], b['F_cr_hel'],
+                                  status_ru.get(b['status'], b['status'])])
+                    if b['status'] == 'sinusoidal':
+                        for c in range(1, 8):
+                            ws_bk.cell(ri, c).fill = yellow
+                    elif b['status'] == 'helical':
+                        for c in range(1, 8):
+                            ws_bk.cell(ri, c).fill = red
+                for col in ws_bk.columns:
+                    ws_bk.column_dimensions[col[0].column_letter].width = 18
 
         out = io.BytesIO()
         wb.save(out)

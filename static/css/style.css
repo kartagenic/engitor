@@ -687,6 +687,28 @@ select.form-input {
 .badge-warn { background: var(--warning-dim); color: var(--warning); }
 .badge-err { background: var(--danger-dim); color: var(--danger); }
 
+/* ── T&D section labels ── */
+.section-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 6px;
+}
+.chart-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+/* Buckling status badges */
+.buck-ok       { color: var(--success); }
+.buck-sin      { color: var(--warning); }
+.buck-hel      { color: var(--danger);  }
+.buck-row-sin td { background: rgba(255,171,0,0.06) !important; }
+.buck-row-hel td { background: rgba(255,23,68,0.06)  !important; }
+
 /* ── Responsive ── */
 @media (max-width: 900px) {
     :root { --sidebar-width: 0px; }
