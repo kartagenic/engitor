@@ -1999,6 +1999,6 @@ function addApi5ctToAssembly() {
 }
 
 // Initialize API 5CT table on load
-(function initApi5ct() {
+document.addEventListener('DOMContentLoaded', function initApi5ct() {
     filterApi5ct();
-})();
+});
