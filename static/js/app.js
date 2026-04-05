@@ -2,6 +2,137 @@
    WellMech — Frontend Application
    ═══════════════════════════════════════════════════════════ */
 
+// ════════════════════════════════════════════════════════════
+// ЕДИНИЦЫ ИЗМЕРЕНИЯ — SI / FIELD
+// ════════════════════════════════════════════════════════════
+
+const UNITS = {
+    si:    { depth:'м',   weight:'кг',  linwt:'кг/м',   force:'кН',   od:'мм',  dens:'г/см³' },
+    field: { depth:'ft',  weight:'lb',  linwt:'lb/ft',  force:'klbf', od:'in',  dens:'ppg'  },
+};
+
+// Conversion factors: multiply to go FROM field TO SI
+const FIELD_TO_SI = {
+    depth:  0.3048,    // ft -> m
+    weight: 0.453592,  // lb -> kg
+    linwt:  1.48816,   // lb/ft -> kg/m
+    force:  4.44822,   // klbf -> kN
+    od:     25.4,      // in -> mm
+    dens:   0.11983,   // ppg -> g/cm³
+};
+
+let unitSystem = localStorage.getItem('wm-units') || 'si';
+
+function toSI(val, type) {
+    if (unitSystem === 'si') return val;
+    return val * FIELD_TO_SI[type];
+}
+
+function fromSI(val, type) {
+    if (unitSystem === 'si') return val;
+    return val / FIELD_TO_SI[type];
+}
+
+function toggleUnits() {
+    unitSystem = unitSystem === 'si' ? 'field' : 'si';
+    localStorage.setItem('wm-units', unitSystem);
+    applyUnitLabels();
+    convertInputValues();
+    updateAssemblySummary();
+    // Update toggle thumb visual
+    const thumb = document.getElementById('units-toggle-thumb');
+    if (thumb) thumb.style.transform = unitSystem === 'field' ? 'translateX(20px)' : '';
+}
+
+function applyUnitLabels() {
+    // Update label spans
+    document.querySelectorAll('.unit-lbl[data-unit]').forEach(el => {
+        const type = el.getAttribute('data-unit');
+        if (UNITS[unitSystem][type]) el.textContent = UNITS[unitSystem][type];
+    });
+    // Update toggle button label
+    const lbl = document.getElementById('units-toggle-label');
+    if (lbl) lbl.textContent = unitSystem === 'field' ? 'SI единицы' : 'Field Units';
+    // Stat card units
+    const totalLengthEl = document.getElementById('total-length');
+    if (totalLengthEl) {
+        // will be re-rendered by updateAssemblySummary
+    }
+}
+
+function convertInputValues() {
+    // Convert all inputs with data-unit-type attribute
+    document.querySelectorAll('input[data-unit-type]').forEach(inp => {
+        const type = inp.getAttribute('data-unit-type');
+        const val = parseFloat(inp.value);
+        if (!isNaN(val) && val !== 0) {
+            if (unitSystem === 'field') {
+                // switching TO field: convert from SI to field
+                inp.value = (val / FIELD_TO_SI[type]).toFixed(4).replace(/\.?0+$/, '');
+            } else {
+                // switching TO SI: convert from field to SI
+                inp.value = (val * FIELD_TO_SI[type]).toFixed(4).replace(/\.?0+$/, '');
+            }
+        }
+    });
+    // Also convert assembly table inputs (each row)
+    const asmRows = document.getElementById('assembly-tbody').rows;
+    for (const row of asmRows) {
+        const inputs = row.querySelectorAll('input[type="number"]');
+        // number inputs only: [0]=len(depth), [1]=weight, [2]=od, [3]=wtPerUnit(linwt), [4]=maxLoad(force)
+        const types = ['depth', 'weight', 'od', 'linwt', 'force'];
+        inputs.forEach((inp, i) => {
+            const type = types[i];
+            if (!type) return;
+            const val = parseFloat(inp.value);
+            if (!isNaN(val) && val !== 0) {
+                if (unitSystem === 'field') {
+                    inp.value = (val / FIELD_TO_SI[type]).toFixed(4).replace(/\.?0+$/, '');
+                } else {
+                    inp.value = (val * FIELD_TO_SI[type]).toFixed(4).replace(/\.?0+$/, '');
+                }
+            }
+        });
+    }
+    // Convert survey depth column
+    const surveyRows = document.getElementById('survey-tbody').rows;
+    for (const row of surveyRows) {
+        const inp = row.querySelectorAll('input')[0];
+        if (!inp) continue;
+        const val = parseFloat(inp.value);
+        if (!isNaN(val) && val !== 0) {
+            if (unitSystem === 'field') {
+                inp.value = (val / FIELD_TO_SI['depth']).toFixed(2).replace(/\.?0+$/, '');
+            } else {
+                inp.value = (val * FIELD_TO_SI['depth']).toFixed(2).replace(/\.?0+$/, '');
+            }
+        }
+    }
+    // Convert mu-tbody depth inputs
+    const muRows = document.getElementById('mu-tbody').rows;
+    for (const row of muRows) {
+        const ins = row.querySelectorAll('input');
+        [0, 1].forEach(i => {
+            if (!ins[i]) return;
+            const val = parseFloat(ins[i].value);
+            if (!isNaN(val) && val !== 0) {
+                if (unitSystem === 'field') {
+                    ins[i].value = (val / FIELD_TO_SI['depth']).toFixed(2).replace(/\.?0+$/, '');
+                } else {
+                    ins[i].value = (val * FIELD_TO_SI['depth']).toFixed(2).replace(/\.?0+$/, '');
+                }
+            }
+        });
+    }
+}
+
+// Init unit system on load
+(function initUnits() {
+    applyUnitLabels();
+    const thumb = document.getElementById('units-toggle-thumb');
+    if (thumb) thumb.style.transform = unitSystem === 'field' ? 'translateX(20px)' : '';
+})();
+
 // ── Состояние приложения ──
 const state = {
     survey: [],
@@ -191,7 +322,7 @@ function getSurveyData() {
         const i = parseFloat(inputs[1].value);
         const a = parseFloat(inputs[2].value);
         if (!isNaN(d) && !isNaN(i) && !isNaN(a)) {
-            survey.push({ depth: d, inclination: i, azimuth: a });
+            survey.push({ depth: toSI(d, 'depth'), inclination: i, azimuth: a });
         }
     }
     return survey;
@@ -283,10 +414,51 @@ function getMuIntervals() {
         const to = parseFloat(inputs[1].value);
         const mu = parseFloat(inputs[2].value);
         if (!isNaN(from) && !isNaN(to) && !isNaN(mu)) {
-            intervals.push({ depth_from: from, depth_to: to, mu: mu });
+            intervals.push({ depth_from: toSI(from, 'depth'), depth_to: toSI(to, 'depth'), mu: mu });
         }
     }
     return intervals;
+}
+
+function updateMuZones() {
+    const casingShoe = parseFloat(document.getElementById('shoe-casing').value);
+    const linerTop   = parseFloat(document.getElementById('shoe-liner').value);
+    const muOpen   = parseFloat(document.getElementById('mu-openhole').value) || 0.25;
+    const muCased  = parseFloat(document.getElementById('mu-cased').value) || 0.20;
+    const muLiner  = parseFloat(document.getElementById('mu-liner').value) || 0.15;
+
+    // Remove auto-generated rows (marked with data-auto)
+    const tbody = document.getElementById('mu-tbody');
+    Array.from(tbody.rows).forEach(r => { if (r.dataset.auto) r.remove(); });
+
+    // Generate new auto zones
+    const zones = [];
+    if (!isNaN(casingShoe) && casingShoe > 0) {
+        zones.push({ from: 0, to: casingShoe, mu: muCased });
+        if (!isNaN(linerTop) && linerTop > casingShoe) {
+            zones.push({ from: casingShoe, to: linerTop, mu: muLiner });
+            zones.push({ from: linerTop, to: 99999, mu: muOpen });
+        } else {
+            zones.push({ from: casingShoe, to: 99999, mu: muOpen });
+        }
+    } else if (!isNaN(linerTop) && linerTop > 0) {
+        zones.push({ from: 0, to: linerTop, mu: muLiner });
+        zones.push({ from: linerTop, to: 99999, mu: muOpen });
+    }
+
+    // Insert auto rows at beginning
+    zones.reverse().forEach(z => {
+        const tr = document.createElement('tr');
+        tr.dataset.auto = '1';
+        tr.innerHTML = `
+            <td><input type="number" step="any" value="${z.from}" placeholder="0"></td>
+            <td><input type="number" step="any" value="${z.to === 99999 ? '' : z.to}" placeholder="99999"></td>
+            <td><input type="number" step="0.01" value="${z.mu}" placeholder="0.25"></td>
+            <td><button class="btn-row-delete" onclick="this.closest('tr').remove()">&times;</button></td>
+        `;
+        tbody.insertBefore(tr, tbody.firstChild);
+    });
+    showInfo('Зоны μ обновлены');
 }
 
 
@@ -294,7 +466,7 @@ function getMuIntervals() {
 // КОМПОНОВКА
 // ════════════════════════════════════════════════════════════
 
-function makeAssemblyRow(name, len, weight, od, maxLoad) {
+function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit) {
     const tbody = document.getElementById('assembly-tbody');
     const idx = tbody.rows.length + 1;
     const tr = document.createElement('tr');
@@ -304,13 +476,37 @@ function makeAssemblyRow(name, len, weight, od, maxLoad) {
         <td><input type="number" step="any" value="${len ?? ''}" placeholder="0"></td>
         <td><input type="number" step="any" value="${weight ?? ''}" placeholder="0"></td>
         <td><input type="number" step="any" value="${od ?? ''}" placeholder="0"></td>
+        <td><input type="number" step="any" value="${wtPerUnit ?? ''}" placeholder="0"></td>
         <td><input type="number" step="any" value="${maxLoad ?? ''}" placeholder="0"></td>
         <td><button class="btn-row-delete" onclick="deleteAssemblyRow(this)">&times;</button></td>
     `;
     tbody.appendChild(tr);
+    // Auto-calculate weight from wtPerUnit if weight empty
+    const inputs = tr.querySelectorAll('input[type="number"]');
+    const lenInp    = inputs[0]; // index in number inputs: len
+    const weightInp = inputs[1];
+    const wtPuInp   = inputs[3]; // wtPerUnit
+    wtPuInp.addEventListener('input', () => {
+        const l = parseFloat(lenInp.value);
+        const w = parseFloat(weightInp.value);
+        const wpu = parseFloat(wtPuInp.value);
+        if (!isNaN(l) && !isNaN(wpu) && (isNaN(w) || w === 0)) {
+            weightInp.value = (l * wpu).toFixed(1);
+            updateAssemblySummary();
+        }
+    });
+    lenInp.addEventListener('input', () => {
+        const l = parseFloat(lenInp.value);
+        const w = parseFloat(weightInp.value);
+        const wpu = parseFloat(wtPuInp.value);
+        if (!isNaN(l) && !isNaN(wpu) && (isNaN(w) || w === 0)) {
+            weightInp.value = (l * wpu).toFixed(1);
+            updateAssemblySummary();
+        }
+    });
 }
 
-function addAssemblyRow() { makeAssemblyRow('', '', '', '', ''); }
+function addAssemblyRow() { makeAssemblyRow('', '', '', '', '', ''); }
 
 function removeAssemblyRow() {
     const tbody = document.getElementById('assembly-tbody');
@@ -335,42 +531,102 @@ function getAssemblyData() {
     const assembly = [];
     for (const row of rows) {
         const inputs = row.querySelectorAll('input');
-        const name = inputs[0].value || `Элемент ${assembly.length + 1}`;
-        const len = parseFloat(inputs[1].value);
-        const weight = parseFloat(inputs[2].value);
-        const od = parseFloat(inputs[3].value) || 0;
-        const maxLoad = parseFloat(inputs[4].value);
+        // inputs: name(text), len, weight, od, wtPerUnit, maxLoad
+        const nameInp  = inputs[0];
+        const numInputs = row.querySelectorAll('input[type="number"]');
+        const name = nameInp.value || `Элемент ${assembly.length + 1}`;
+        const lenRaw     = parseFloat(numInputs[0].value);
+        const weightRaw  = parseFloat(numInputs[1].value);
+        const odRaw      = parseFloat(numInputs[2].value) || 0;
+        const wtPuRaw    = parseFloat(numInputs[3].value) || 0;
+        const maxLoadRaw = parseFloat(numInputs[4].value);
+
+        // Convert to SI
+        const len     = isNaN(lenRaw)     ? NaN : toSI(lenRaw, 'depth');
+        const od      = toSI(odRaw, 'od');
+        const wtPu    = toSI(wtPuRaw, 'linwt');
+        const maxLoad = isNaN(maxLoadRaw) ? NaN : toSI(maxLoadRaw, 'force');
+
+        let weight;
+        if (!isNaN(weightRaw) && weightRaw > 0) {
+            weight = toSI(weightRaw, 'weight');
+        } else if (wtPu > 0 && !isNaN(len)) {
+            // compute from linear weight: kg/m * m = kg
+            weight = wtPu * len;
+        } else {
+            weight = isNaN(weightRaw) ? NaN : 0;
+        }
+
         if (!isNaN(len) && !isNaN(weight) && !isNaN(maxLoad)) {
-            assembly.push({ name, length: len, weight_air: weight, od, max_load: maxLoad });
+            assembly.push({ name, length: len, weight_air: weight, od, max_load: maxLoad, weight_per_unit: wtPu });
         }
     }
     return assembly;
 }
 
 function updateAssemblySummary() {
-    const assembly = getAssemblyData();
-    const totalLen = assembly.reduce((s, e) => s + e.length, 0);
+    const assembly = getAssemblyData();  // already in SI
+    const totalLen    = assembly.reduce((s, e) => s + e.length, 0);
     const totalWeight = assembly.reduce((s, e) => s + e.weight_air, 0);
-    const fd = parseFloat(document.getElementById('fluid-density').value) || 1.2;
-    const bf = 1 - fd / 7.85;
-    const buoyed = totalWeight * bf * 9.81 / 1000;
+    const fdSI = toSI(parseFloat(document.getElementById('fluid-density').value) || 1.2, 'dens');
+    const bf = 1 - fdSI / 7.85;
+    const buoyed = totalWeight * bf * 9.81 / 1000;  // kN
 
-    document.getElementById('total-length').innerHTML = totalLen.toFixed(1) + '<span class="stat-unit">м</span>';
-    document.getElementById('total-weight').innerHTML = totalWeight.toFixed(0) + '<span class="stat-unit">кг</span>';
-    document.getElementById('buoyed-weight').innerHTML = buoyed.toFixed(1) + '<span class="stat-unit">кН</span>';
+    // Display in current unit system
+    const dispLen    = fromSI(totalLen, 'depth');
+    const dispWeight = fromSI(totalWeight, 'weight');
+
+    const lenUnit    = UNITS[unitSystem].depth;
+    const weightUnit = UNITS[unitSystem].weight;
+
+    document.getElementById('total-length').innerHTML    = dispLen.toFixed(1) + `<span class="stat-unit">${lenUnit}</span>`;
+    document.getElementById('total-weight').innerHTML    = dispWeight.toFixed(0) + `<span class="stat-unit">${weightUnit}</span>`;
+    document.getElementById('buoyed-weight').innerHTML   = buoyed.toFixed(1) + '<span class="stat-unit">кН</span>';
+
+    // Vertical weight using trajectory inclination
+    const vertWeightEl = document.getElementById('vert-weight');
+    const survey = getSurveyData();  // already SI depths
+    if (survey.length >= 2 && assembly.length > 0) {
+        let vertWeight = 0;
+        let depthAccum = 0;
+        for (const elem of assembly) {
+            const topDepth = depthAccum;
+            const botDepth = depthAccum + elem.length;
+            const midDepth = (topDepth + botDepth) / 2;
+            // Interpolate inclination at midDepth
+            let avgIncl = 0;
+            for (let i = 1; i < survey.length; i++) {
+                if (survey[i].depth >= midDepth) {
+                    const frac = (midDepth - survey[i-1].depth) / (survey[i].depth - survey[i-1].depth);
+                    avgIncl = survey[i-1].inclination + frac * (survey[i].inclination - survey[i-1].inclination);
+                    break;
+                }
+                avgIncl = survey[survey.length-1].inclination;
+            }
+            const inclRad = avgIncl * Math.PI / 180;
+            // Effective vertical component (kN): weight_air * cos(incl) * g / 1000
+            vertWeight += elem.weight_air * Math.cos(inclRad) * 9.81 / 1000;
+            depthAccum += elem.length;
+        }
+        if (vertWeightEl) vertWeightEl.innerHTML = vertWeight.toFixed(1) + '<span class="stat-unit">кН</span>';
+    } else {
+        if (vertWeightEl) vertWeightEl.innerHTML = '—<span class="stat-unit">кН</span>';
+    }
+
     document.getElementById('total-elements').textContent = assembly.length;
 }
 
 function loadSampleAssembly() {
     document.getElementById('assembly-tbody').innerHTML = '';
+    // [name, len(m), weight(kg), od(mm), maxLoad(kN), wtPerUnit(kg/m)]
     const sample = [
-        ['Долото PDC 215.9 мм', 0.3, 45, 215.9, 500],
-        ['Забойный двигатель', 9.5, 1800, 172, 800],
-        ['КНБК (немагнитная)', 9.0, 450, 171, 700],
-        ['УБТ 178×71', 54, 8640, 178, 2400],
-        ['Бурильные трубы 127×9.19', 2900, 66700, 127, 1800],
+        ['Долото PDC 215.9 мм', 0.3,  45,    215.9, 500,  223.2],
+        ['Забойный двигатель',  9.5,  1800,  172,   800,  283.0],
+        ['КНБК (немагнитная)',  9.0,  450,   171,   700,  74.4],
+        ['УБТ 178×71',          54,   8640,  178,   2400, 238.1],
+        ['Бурильные трубы 127×9.19', 2900, 66700, 127, 1800, 34.2],
     ];
-    sample.forEach(s => makeAssemblyRow(s[0], s[1], s[2], s[3], s[4]));
+    sample.forEach(s => makeAssemblyRow(s[0], s[1], s[2], s[3], s[4], s[5]));
     updateAssemblySummary();
 }
 
@@ -397,9 +653,9 @@ function collectRequestData(targetDepth) {
     return {
         survey: getSurveyData(),
         assembly: getAssemblyData(),
-        target_depth: targetDepth,
-        fluid_density: parseFloat(document.getElementById('fluid-density').value) || 1.2,
-        mu_default: parseFloat(document.getElementById('mu-open').value) || 0.25,
+        target_depth: toSI(targetDepth, 'depth'),
+        fluid_density: toSI(parseFloat(document.getElementById('fluid-density').value) || 1.2, 'dens'),
+        mu_default: parseFloat(document.getElementById('mu-openhole').value) || 0.25,
         mu_intervals: getMuIntervals(),
     };
 }
@@ -1460,7 +1716,196 @@ async function runCalibration() {
 
 function applyCalibration() {
     if (!state.calibratedMu) return;
-    document.getElementById('mu-open').value  = state.calibratedMu;
-    document.getElementById('mu-cased').value = state.calibratedMu;
-    alert(`Применено μ = ${state.calibratedMu} для открытого ствола и обсадной колонны`);
+    document.getElementById('mu-openhole').value = state.calibratedMu;
+    document.getElementById('mu-cased').value    = state.calibratedMu;
+    showSuccess(`Применено μ = ${state.calibratedMu} для открытого ствола и обсадной колонны`);
 }
+
+
+// ════════════════════════════════════════════════════════════
+// API 5CT — ПОДБОР ОБСАДНЫХ ТРУБ
+// ════════════════════════════════════════════════════════════
+
+const API5CT_DATA = [
+    // Tubing
+    {od:2.375, wt:4.6,   grade:'J55',  wall:0.190, yield:55,  type:'EUE'},
+    {od:2.375, wt:4.6,   grade:'N80',  wall:0.190, yield:80,  type:'EUE'},
+    {od:2.875, wt:6.5,   grade:'J55',  wall:0.217, yield:55,  type:'EUE'},
+    {od:2.875, wt:6.5,   grade:'N80',  wall:0.217, yield:80,  type:'EUE'},
+    {od:3.5,   wt:9.3,   grade:'J55',  wall:0.254, yield:55,  type:'EUE'},
+    {od:3.5,   wt:9.3,   grade:'N80',  wall:0.254, yield:80,  type:'EUE'},
+    {od:4.5,   wt:12.6,  grade:'J55',  wall:0.271, yield:55,  type:'EUE'},
+    {od:4.5,   wt:12.6,  grade:'N80',  wall:0.271, yield:80,  type:'EUE'},
+    // Casing
+    {od:4.5,   wt:9.5,   grade:'J55',  wall:0.205, yield:55,  type:'STC'},
+    {od:4.5,   wt:11.6,  grade:'J55',  wall:0.250, yield:55,  type:'BTC'},
+    {od:4.5,   wt:13.5,  grade:'N80',  wall:0.290, yield:80,  type:'BTC'},
+    {od:5.0,   wt:11.5,  grade:'J55',  wall:0.220, yield:55,  type:'STC'},
+    {od:5.0,   wt:15.0,  grade:'N80',  wall:0.296, yield:80,  type:'BTC'},
+    {od:5.5,   wt:14.0,  grade:'J55',  wall:0.244, yield:55,  type:'STC'},
+    {od:5.5,   wt:17.0,  grade:'N80',  wall:0.304, yield:80,  type:'BTC'},
+    {od:5.5,   wt:20.0,  grade:'L80',  wall:0.361, yield:80,  type:'BTC'},
+    {od:5.5,   wt:23.0,  grade:'P110', wall:0.415, yield:110, type:'BTC'},
+    {od:7.0,   wt:17.0,  grade:'J55',  wall:0.231, yield:55,  type:'STC'},
+    {od:7.0,   wt:23.0,  grade:'N80',  wall:0.317, yield:80,  type:'BTC'},
+    {od:7.0,   wt:26.0,  grade:'L80',  wall:0.362, yield:80,  type:'BTC'},
+    {od:7.0,   wt:29.0,  grade:'P110', wall:0.408, yield:110, type:'BTC'},
+    {od:7.625, wt:24.0,  grade:'N80',  wall:0.300, yield:80,  type:'BTC'},
+    {od:7.625, wt:33.7,  grade:'P110', wall:0.430, yield:110, type:'BTC'},
+    {od:9.625, wt:32.3,  grade:'J55',  wall:0.312, yield:55,  type:'STC'},
+    {od:9.625, wt:36.0,  grade:'N80',  wall:0.352, yield:80,  type:'BTC'},
+    {od:9.625, wt:43.5,  grade:'L80',  wall:0.435, yield:80,  type:'BTC'},
+    {od:9.625, wt:47.0,  grade:'P110', wall:0.472, yield:110, type:'BTC'},
+    {od:10.75, wt:32.75, grade:'J55',  wall:0.279, yield:55,  type:'STC'},
+    {od:10.75, wt:40.5,  grade:'N80',  wall:0.350, yield:80,  type:'BTC'},
+    {od:13.375,wt:48.0,  grade:'J55',  wall:0.330, yield:55,  type:'STC'},
+    {od:13.375,wt:54.5,  grade:'N80',  wall:0.380, yield:80,  type:'BTC'},
+    {od:13.375,wt:61.0,  grade:'L80',  wall:0.430, yield:80,  type:'BTC'},
+    {od:18.625,wt:87.5,  grade:'J55',  wall:0.435, yield:55,  type:'STC'},
+    {od:20.0,  wt:94.0,  grade:'H40',  wall:0.438, yield:40,  type:'STC'},
+];
+
+const threadFactor = { BTC: 0.85, LTC: 0.75, STC: 0.60, EUE: 0.80, NUE: 0.65 };
+
+function calcApi5ct(pipe) {
+    const id_in  = pipe.od - 2 * pipe.wall;
+    const A_mm2  = Math.PI / 4 * (pipe.od * pipe.od - id_in * id_in) * 645.16;
+    const F_body = A_mm2 * pipe.yield * 6.895 / 1000;  // kN
+    const tf     = threadFactor[pipe.type] || 0.75;
+    const F_thread = F_body * tf;
+    const P_burst    = 0.875 * 2 * pipe.yield * pipe.wall / pipe.od * 6.895;  // MPa
+    const P_collapse = 0.75 * P_burst;
+    return {
+        F_body:    F_body.toFixed(1),
+        F_thread:  F_thread.toFixed(1),
+        P_burst:   P_burst.toFixed(1),
+        P_collapse: P_collapse.toFixed(1),
+        od_mm:     (pipe.od * 25.4).toFixed(1),
+        wall_mm:   (pipe.wall * 25.4).toFixed(2),
+    };
+}
+
+let _api5ctSelected = null;
+
+function filterApi5ct() {
+    const odF    = document.getElementById('api5ct-od-filter').value;
+    const gradeF = document.getElementById('api5ct-grade-filter').value;
+    const typeF  = document.getElementById('api5ct-type-filter').value;
+
+    const filtered = API5CT_DATA.filter(p => {
+        if (odF    && String(p.od)    !== odF)    return false;
+        if (gradeF && p.grade         !== gradeF) return false;
+        if (typeF  && p.type          !== typeF)  return false;
+        return true;
+    });
+
+    const tbody = document.getElementById('api5ct-tbody');
+    tbody.innerHTML = '';
+    filtered.forEach((pipe, idx) => {
+        const calc = calcApi5ct(pipe);
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.innerHTML = `
+            <td>${pipe.od} / ${calc.od_mm}</td>
+            <td>${pipe.wt}</td>
+            <td>${pipe.grade}</td>
+            <td>${calc.wall_mm}</td>
+            <td>${pipe.type}</td>
+            <td>${calc.F_body}</td>
+            <td>${calc.F_thread}</td>
+            <td>${calc.P_burst}</td>
+            <td>${calc.P_collapse}</td>
+            <td><button class="btn btn-ghost btn-sm" onclick="selectApi5ct(${idx}, event)">&#10003;</button></td>
+        `;
+        tr.addEventListener('click', () => selectApi5ctByPipe(pipe, calc));
+        tbody.appendChild(tr);
+    });
+
+    // Store filtered for selection
+    tbody._filteredData = filtered;
+    // Hide detail
+    document.getElementById('api5ct-detail').style.display = 'none';
+}
+
+function selectApi5ct(idx, e) {
+    if (e) e.stopPropagation();
+    const tbody = document.getElementById('api5ct-tbody');
+    const filtered = tbody._filteredData || API5CT_DATA;
+    const pipe = filtered[idx];
+    if (!pipe) return;
+    const calc = calcApi5ct(pipe);
+    selectApi5ctByPipe(pipe, calc);
+}
+
+function selectApi5ctByPipe(pipe, calc) {
+    _api5ctSelected = { pipe, calc };
+    const det = document.getElementById('api5ct-detail');
+    const content = document.getElementById('api5ct-detail-content');
+    det.style.display = '';
+    content.innerHTML = `
+        <div class="stats-row" style="flex-wrap:wrap;gap:8px">
+            <div class="stat-card"><div class="stat-label">OD</div>
+                <div class="stat-value">${pipe.od}<span class="stat-unit">in</span></div></div>
+            <div class="stat-card"><div class="stat-label">OD (мм)</div>
+                <div class="stat-value">${calc.od_mm}<span class="stat-unit">мм</span></div></div>
+            <div class="stat-card"><div class="stat-label">Вес</div>
+                <div class="stat-value">${pipe.wt}<span class="stat-unit">lb/ft</span></div></div>
+            <div class="stat-card"><div class="stat-label">Марка</div>
+                <div class="stat-value">${pipe.grade}</div></div>
+            <div class="stat-card"><div class="stat-label">Резьба</div>
+                <div class="stat-value">${pipe.type}</div></div>
+            <div class="stat-card"><div class="stat-label">Толщина</div>
+                <div class="stat-value">${calc.wall_mm}<span class="stat-unit">мм</span></div></div>
+            <div class="stat-card"><div class="stat-label">F тело</div>
+                <div class="stat-value">${calc.F_body}<span class="stat-unit">кН</span></div></div>
+            <div class="stat-card"><div class="stat-label">F резьба</div>
+                <div class="stat-value">${calc.F_thread}<span class="stat-unit">кН</span></div></div>
+            <div class="stat-card"><div class="stat-label">P разрыв</div>
+                <div class="stat-value">${calc.P_burst}<span class="stat-unit">МПа</span></div></div>
+            <div class="stat-card"><div class="stat-label">P смятие</div>
+                <div class="stat-value">${calc.P_collapse}<span class="stat-unit">МПа</span></div></div>
+        </div>`;
+    // Pre-fill element name
+    const nameInp = document.getElementById('api5ct-element-name');
+    if (nameInp && !nameInp.value) {
+        nameInp.value = `${pipe.grade} ${pipe.od}" ${pipe.wt}lb/ft ${pipe.type}`;
+    }
+}
+
+function addApi5ctToAssembly() {
+    if (!_api5ctSelected) { showError('Выберите трубу из таблицы'); return; }
+    const { pipe, calc } = _api5ctSelected;
+    const nameInp = document.getElementById('api5ct-element-name');
+    const lenInp  = document.getElementById('api5ct-element-len');
+    const name = nameInp.value || `${pipe.grade} ${pipe.od}" casing`;
+    const lenSI = parseFloat(lenInp.value) || 0;
+
+    // Values in SI (mm OD, kg/m linear weight, kN max load)
+    const od_mm   = parseFloat(calc.od_mm);
+    const wt_kgm  = pipe.wt * 1.48816;  // lb/ft -> kg/m
+    const weight  = wt_kgm * lenSI;
+    const maxLoad = parseFloat(calc.F_thread);
+
+    // Display in current unit system
+    const lenDisp    = fromSI(lenSI, 'depth');
+    const weightDisp = fromSI(weight, 'weight');
+    const odDisp     = fromSI(od_mm, 'od');
+    const wtPuDisp   = fromSI(wt_kgm, 'linwt');
+    const maxLoadDisp = fromSI(maxLoad, 'force');
+
+    makeAssemblyRow(name, lenDisp.toFixed(2), weightDisp.toFixed(1),
+                    odDisp.toFixed(2), maxLoadDisp.toFixed(1), wtPuDisp.toFixed(2));
+    renumberRows('assembly-tbody');
+    updateAssemblySummary();
+    // Clear form
+    nameInp.value = '';
+    lenInp.value  = '';
+    showSuccess(`Добавлен элемент: ${name}`);
+    // Switch to assembly tab
+    goToTab('assembly');
+}
+
+// Initialize API 5CT table on load
+(function initApi5ct() {
+    filterApi5ct();
+})();
