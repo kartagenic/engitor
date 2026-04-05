@@ -6,25 +6,91 @@
 const state = {
     survey: [],
     assembly: [],
-    results: { reachability: null, hookload: null, packer: null },
+    trajectory: null,
+    calibratedMu: null,
+    results: { reachability: null, hookload: null, packer: null, torqueDrag: null },
 };
 
-// ── Plotly тема ──
-const plotlyLayout = {
-    paper_bgcolor: '#0f101a',
-    plot_bgcolor: '#0a0b12',
-    font: { color: '#8b8fa8', family: 'Inter, system-ui, sans-serif', size: 11 },
-    margin: { l: 65, r: 20, t: 36, b: 50 },
-    xaxis: {
-        gridcolor: '#1e2035', linecolor: '#1e2035', zerolinecolor: '#1e2035',
-        title: { font: { size: 12 } },
-    },
-    yaxis: {
-        gridcolor: '#1e2035', linecolor: '#1e2035', zerolinecolor: '#1e2035',
-        autorange: 'reversed',
-        title: { font: { size: 12 } },
-    },
-};
+// ════════════════════════════════════════════════════════════
+// ТЕМА — СВЕТЛАЯ / ТЁМНАЯ
+// ════════════════════════════════════════════════════════════
+
+(function initTheme() {
+    const saved = localStorage.getItem('wm-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', saved);
+    updateThemeLabel(saved);
+})();
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next    = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('wm-theme', next);
+    updateThemeLabel(next);
+    // Перерисовать открытые графики
+    redrawAllCharts();
+}
+
+function updateThemeLabel(theme) {
+    const el = document.getElementById('theme-toggle-label');
+    if (el) el.textContent = theme === 'dark' ? 'Светлая тема' : 'Тёмная тема';
+}
+
+// ── Динамический Plotly layout, зависящий от темы ──
+function getPlotlyLayout(overrides = {}) {
+    const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+    const bg   = dark ? '#0f101a' : '#ffffff';
+    const surf = dark ? '#0a0b12' : '#f4f6fb';
+    const grid = dark ? '#1e2035' : '#d5daf0';
+    const txt  = dark ? '#8b8fa8' : '#4a506e';
+
+    return {
+        paper_bgcolor: bg,
+        plot_bgcolor:  surf,
+        font: { color: txt, family: 'Inter, system-ui, sans-serif', size: 11 },
+        margin: { l: 65, r: 20, t: 36, b: 50 },
+        xaxis: { gridcolor: grid, linecolor: grid, zerolinecolor: grid,
+                 tickfont: { color: txt }, title: { font: { size: 12 } } },
+        yaxis: { gridcolor: grid, linecolor: grid, zerolinecolor: grid,
+                 autorange: 'reversed', tickfont: { color: txt },
+                 title: { font: { size: 12 } } },
+        legend: { bgcolor: dark ? 'rgba(20,21,31,0.85)' : 'rgba(255,255,255,0.9)',
+                  bordercolor: grid, font: { color: txt, size: 11 } },
+        ...overrides,
+    };
+}
+
+// ID всех живых графиков для перерисовки при смене темы
+const _liveCharts = new Set();
+function _plot(divId, traces, layoutOverride = {}, configOverride = {}) {
+    const layout = { ...getPlotlyLayout(), ...layoutOverride };
+    Plotly.newPlot(divId, traces, layout,
+                   { responsive: true, displaylogo: false,
+                     modeBarButtonsToRemove: ['lasso2d','select2d'],
+                     ...configOverride });
+    _liveCharts.add(divId);
+}
+function redrawAllCharts() {
+    // Re-layout colour props for all live charts
+    const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+    const bg   = dark ? '#0f101a' : '#ffffff';
+    const surf = dark ? '#0a0b12' : '#f4f6fb';
+    const grid = dark ? '#1e2035' : '#d5daf0';
+    const txt  = dark ? '#8b8fa8' : '#4a506e';
+    const legendBg = dark ? 'rgba(20,21,31,0.85)' : 'rgba(255,255,255,0.9)';
+    _liveCharts.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || !el._fullLayout) return;
+        Plotly.relayout(id, {
+            paper_bgcolor: bg, plot_bgcolor: surf,
+            'font.color': txt,
+            'xaxis.gridcolor': grid, 'xaxis.linecolor': grid, 'xaxis.zerolinecolor': grid,
+            'yaxis.gridcolor': grid, 'yaxis.linecolor': grid, 'yaxis.zerolinecolor': grid,
+            'legend.bgcolor': legendBg, 'legend.bordercolor': grid,
+        }).catch(() => {});
+    });
+}
+
 const plotlyConfig = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] };
 
 
@@ -40,8 +106,9 @@ document.querySelectorAll('.nav-item').forEach(item => {
         document.getElementById('tab-' + item.dataset.tab).classList.add('active');
 
         if (item.dataset.tab === 'calculations') { updatePackerSelect(); syncTdDepth(); }
-        if (item.dataset.tab === 'export') updateStatusChecklist();
-        if (item.dataset.tab === 'assembly') updateAssemblySummary();
+        if (item.dataset.tab === 'export')        updateStatusChecklist();
+        if (item.dataset.tab === 'assembly')      updateAssemblySummary();
+        if (item.dataset.tab === 'analytics')     refreshAnalytics();
     });
 });
 
@@ -412,15 +479,12 @@ async function calcReachability() {
             line: { color: '#3d5afe', width: 2 },
             marker: { size: 4, color: '#3d5afe' },
             name: 'Осевая нагрузка',
-            fill: 'tozerox',
-            fillcolor: 'rgba(61,90,254,0.06)',
+            fill: 'tozerox', fillcolor: 'rgba(61,90,254,0.06)',
         };
-        const layout = {
-            ...plotlyLayout,
-            xaxis: { ...plotlyLayout.xaxis, title: 'Осевая нагрузка (кН)' },
-            yaxis: { ...plotlyLayout.yaxis, title: 'Глубина (м)' },
-        };
-        Plotly.newPlot('reach-chart', [trace], layout, plotlyConfig);
+        _plot('reach-chart', [trace], {
+            xaxis: { title: 'Осевая нагрузка (кН)' },
+            yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
+        });
 
         // Таблица
         const tbody = document.getElementById('reach-force-tbody');
@@ -587,15 +651,12 @@ async function calcHookload() {
             line: { color: '#00bcd4', width: 2 },
             marker: { size: 4, color: '#00bcd4' },
             name: 'Вес на крюке',
-            fill: 'tozerox',
-            fillcolor: 'rgba(0,188,212,0.06)',
+            fill: 'tozerox', fillcolor: 'rgba(0,188,212,0.06)',
         };
-        const layout = {
-            ...plotlyLayout,
-            xaxis: { ...plotlyLayout.xaxis, title: 'Осевая нагрузка (кН)' },
-            yaxis: { ...plotlyLayout.yaxis, title: 'Глубина (м)' },
-        };
-        Plotly.newPlot('hook-chart', [trace], layout, plotlyConfig);
+        _plot('hook-chart', [trace], {
+            xaxis: { title: 'Осевая нагрузка (кН)' },
+            yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
+        });
 
         // Таблица
         const tbody = document.getElementById('hook-force-tbody');
@@ -706,18 +767,11 @@ async function calcTorqueDrag() {
             name: '0 кН', showlegend: false,
         };
 
-        const layoutDrag = {
-            ...plotlyLayout,
-            xaxis: { ...plotlyLayout.xaxis, title: 'Осевая нагрузка (кН)',
-                     zeroline: true, zerolinecolor: '#3a3d55', zerolinewidth: 1 },
-            yaxis: { ...plotlyLayout.yaxis, title: 'Глубина (м)' },
-            legend: { x: 0.01, y: 0.01, bgcolor: 'rgba(20,21,31,0.8)',
-                      bordercolor: '#1e2035', font: { color: '#8b8fa8', size: 11 } },
+        _plot('td-drag-chart', [traceFill, traceRih, tracePooh, traceZero], {
+            xaxis: { title: 'Осевая нагрузка (кН)', zeroline: true, zerolinewidth: 1 },
+            yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
             height: 360,
-        };
-        Plotly.newPlot('td-drag-chart',
-                       [traceFill, traceRih, tracePooh, traceZero],
-                       layoutDrag, plotlyConfig);
+        });
 
         // ── Torque-график ──
         const depT = res.torque.map(t => t.depth);
@@ -731,13 +785,11 @@ async function calcTorqueDrag() {
             fillcolor: 'rgba(255,171,0,0.06)',
             name: 'Момент',
         };
-        const layoutTorq = {
-            ...plotlyLayout,
-            xaxis: { ...plotlyLayout.xaxis, title: 'Крутящий момент (кН·м)' },
-            yaxis: { ...plotlyLayout.yaxis, title: 'Глубина (м)' },
+        _plot('td-torque-chart', [traceTorq], {
+            xaxis: { title: 'Крутящий момент (кН·м)' },
+            yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
             height: 320,
-        };
-        Plotly.newPlot('td-torque-chart', [traceTorq], layoutTorq, plotlyConfig);
+        });
 
         // ── Трение по элементам (горизонтальный bar) ──
         const segs  = res.segments || [];
@@ -757,18 +809,13 @@ async function calcTorqueDrag() {
             name: 'Подъём POOH',
             marker: { color: 'rgba(0,200,83,0.75)' },
         };
-        const layoutBar = {
-            ...plotlyLayout,
-            yaxis: { ...plotlyLayout.yaxis, autorange: 'reversed',
-                     title: '', automargin: true },
-            xaxis: { ...plotlyLayout.xaxis, title: 'Сила трения (кН)' },
+        _plot('td-friction-chart', [barRih, barPooh], {
+            yaxis: { autorange: 'reversed', title: '', automargin: true },
+            xaxis: { title: 'Сила трения (кН)' },
             barmode: 'group',
             height: Math.max(220, segs.length * 32 + 60),
-            margin: { ...plotlyLayout.margin, l: 160 },
-            legend: { x: 0.6, y: 0.99, bgcolor: 'rgba(20,21,31,0.8)',
-                      bordercolor: '#1e2035', font: { color: '#8b8fa8', size: 11 } },
-        };
-        Plotly.newPlot('td-friction-chart', [barRih, barPooh], layoutBar, plotlyConfig);
+            margin: { l: 160, r: 20, t: 36, b: 50 },
+        });
 
         // ── Таблица по элементам ──
         const segTbody = document.getElementById('td-seg-tbody');
@@ -939,6 +986,453 @@ function syncTdDepth() {
 
 function setStatus(id, done) {
     const el = document.getElementById(id);
+    if (!el) return;
     if (done) el.classList.add('done');
     else el.classList.remove('done');
+}
+
+
+// ════════════════════════════════════════════════════════════
+// ВИЗ УАЛИЗАЦИЯ СКВАЖИНЫ
+// ════════════════════════════════════════════════════════════
+
+let _vizData = null;  // cached trajectory points
+
+async function buildTrajectory() {
+    const survey = getSurveyData();
+    if (survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
+
+    document.getElementById('traj-spinner').style.display = '';
+    document.getElementById('btn-build-traj').disabled = true;
+    document.getElementById('viz-results').style.display = 'none';
+
+    try {
+        const res = await apiPost('/api/calculate/trajectory', { survey });
+        if (!res.success) { showError(res.error); return; }
+
+        _vizData = res;
+        state.trajectory = res;
+        document.getElementById('viz-results').style.display = '';
+
+        // KPI
+        document.getElementById('traj-kpi').innerHTML = `
+            <div class="stat-card">
+                <div class="stat-label">Макс. TVD</div>
+                <div class="stat-value">${res.max_tvd}<span class="stat-unit">м</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Горизонтальное смещение</div>
+                <div class="stat-value">${res.max_hd}<span class="stat-unit">м</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Макс. DLS</div>
+                <div class="stat-value">${res.max_dls}<span class="stat-unit">°/30м</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Точек замера</div>
+                <div class="stat-value">${res.points.length}</div>
+            </div>`;
+
+        renderVizTab('2d');
+        populateTrajTable(res.points);
+
+    } catch(e) {
+        showError('Ошибка: ' + e.message);
+    } finally {
+        document.getElementById('traj-spinner').style.display = 'none';
+        document.getElementById('btn-build-traj').disabled = false;
+    }
+}
+
+function switchVizTab(tab) {
+    ['2d','plan','3d','dls'].forEach(t => {
+        document.getElementById(`viz-${t}`).style.display = t === tab ? '' : 'none';
+        document.getElementById(`viz-btn-${t}`).classList.toggle('active', t === tab);
+    });
+    if (_vizData) renderVizTab(tab);
+}
+
+function renderVizTab(tab) {
+    if (!_vizData) return;
+    const pts = _vizData.points;
+    const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+
+    if (tab === '2d') {
+        // Вертикальный профиль: горизонтальное расстояние vs TVD
+        const trace = {
+            x: pts.map(p => p.hd),
+            y: pts.map(p => p.tvd),
+            type: 'scatter', mode: 'lines+markers',
+            line: { color: '#3d5afe', width: 2.5 },
+            marker: { size: 5, color: pts.map(p => p.inc),
+                      colorscale: 'Viridis', showscale: true,
+                      colorbar: { title: 'Угол (°)', thickness: 12,
+                                  tickfont: { color: dark ? '#8b8fa8' : '#4a506e' },
+                                  titlefont: { color: dark ? '#8b8fa8' : '#4a506e' } } },
+            name: 'Траектория',
+        };
+        _plot('viz-2d', [trace], {
+            xaxis: { title: 'Горизонтальное расстояние (м)' },
+            yaxis: { autorange: 'reversed', title: 'TVD (м)' },
+            height: 480,
+        });
+    } else if (tab === 'plan') {
+        // Вид в плане: N vs E
+        const trace = {
+            x: pts.map(p => p.east),
+            y: pts.map(p => p.north),
+            type: 'scatter', mode: 'lines+markers',
+            line: { color: '#ffab00', width: 2.5 },
+            marker: { size: 5, color: '#ffab00' },
+            name: 'Трасса в плане',
+        };
+        const start = { x: [0], y: [0], type: 'scatter', mode: 'markers',
+                        marker: { size: 12, color: '#00c853', symbol: 'star' }, name: 'Устье' };
+        const end   = { x: [pts[pts.length-1].east], y: [pts[pts.length-1].north],
+                        type: 'scatter', mode: 'markers',
+                        marker: { size: 12, color: '#ff1744', symbol: 'x' }, name: 'Забой' };
+        _plot('viz-plan', [trace, start, end], {
+            xaxis: { title: 'Восток (м)', scaleanchor: 'y' },
+            yaxis: { autorange: undefined, title: 'Север (м)' },
+            height: 480,
+        });
+    } else if (tab === '3d') {
+        // 3D
+        const assembly = getAssemblyData();
+        const totalLen = assembly.reduce((s,e) => s+e.length, 0);
+        const trace3d = {
+            x: pts.map(p => p.east),
+            y: pts.map(p => p.north),
+            z: pts.map(p => -p.tvd),
+            type: 'scatter3d', mode: 'lines+markers',
+            line: { color: pts.map(p => p.inc), colorscale: 'Viridis', width: 5 },
+            marker: { size: 3 },
+            name: 'Траектория',
+        };
+        const bg3 = dark ? '#0a0b12' : '#f4f6fb';
+        const grid3 = dark ? '#1e2035' : '#d5daf0';
+        const txt3  = dark ? '#8b8fa8' : '#4a506e';
+        _plot('viz-3d', [trace3d], {
+            scene: {
+                bgcolor: bg3,
+                xaxis: { title: 'Восток (м)', gridcolor: grid3, tickfont: { color: txt3 } },
+                yaxis: { title: 'Север (м)',  gridcolor: grid3, tickfont: { color: txt3 } },
+                zaxis: { title: 'TVD (м)',    gridcolor: grid3, tickfont: { color: txt3 } },
+                camera: { eye: { x: 1.5, y: 1.5, z: 0.8 } },
+            },
+            paper_bgcolor: bg3,
+            margin: { l: 0, r: 0, t: 0, b: 0 },
+            height: 520,
+        }, { scrollZoom: true });
+    } else if (tab === 'dls') {
+        // DLS vs MD
+        const colors = pts.map(p =>
+            p.dls > 3 ? '#ff1744' : p.dls > 1.5 ? '#ffab00' : '#00c853');
+        const trace = {
+            x: pts.map(p => p.dls),
+            y: pts.map(p => p.md),
+            type: 'scatter', mode: 'lines+markers',
+            line: { color: '#3d5afe', width: 2 },
+            marker: { size: 7, color: colors },
+            name: 'DLS',
+        };
+        _plot('viz-dls', [trace], {
+            xaxis: { title: 'DLS (°/30м)' },
+            yaxis: { autorange: 'reversed', title: 'MD (м)' },
+            height: 360,
+        });
+    }
+}
+
+function populateTrajTable(pts) {
+    const tbody = document.getElementById('traj-tbody');
+    tbody.innerHTML = '';
+    pts.forEach(p => {
+        const dlsCls = p.dls > 3 ? 'dls-cell-high' : p.dls > 1.5 ? 'dls-cell-mid' : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${p.md}</td><td>${p.inc}</td><td>${p.azi}</td>
+            <td>${p.tvd}</td><td>${p.north}</td><td>${p.east}</td>
+            <td>${p.hd}</td><td class="${dlsCls}">${p.dls}</td>`;
+        tbody.appendChild(tr);
+    });
+}
+
+
+// ════════════════════════════════════════════════════════════
+// АНАЛИТИКА — ДАШБОРД
+// ════════════════════════════════════════════════════════════
+
+function refreshAnalytics() {
+    const td = state.results.torqueDrag;
+    const reach = state.results.reachability;
+    const hook  = state.results.hookload;
+
+    const grid = document.getElementById('analytics-kpi');
+    if (!td && !reach && !hook) return;
+
+    let cards = '';
+    if (td) {
+        const df_pct = (td.drag_factor * 100).toFixed(1);
+        const dfClass = td.drag_factor > 0.4 ? 'danger' : td.drag_factor > 0.25 ? 'warn' : 'ok';
+        cards += kpiCard('Нагрузка POOH', td.hookload_pooh, 'кН', '', '');
+        cards += kpiCard('Нагрузка RIH',  td.hookload_rih,  'кН', '', '');
+        cards += kpiCard('Окно трения',   (td.hookload_pooh - td.hookload_rih).toFixed(1), 'кН', '', dfClass);
+        cards += kpiCard('Момент на устье', td.torque_surface, 'кН·м', '', '');
+        cards += kpiCard('Drag-фактор',   df_pct, '%', '', dfClass);
+        cards += kpiCard('Вес BF', td.W_buoy_kN, 'кН', '', '');
+    }
+    if (reach) {
+        const rcClass = reach.reaches ? 'ok' : 'danger';
+        cards += kpiCard('Доходимость', reach.reaches ? 'Да ✓' : 'Нет ✗', '', '', rcClass);
+    }
+    if (td && td.buckling && td.buckling.length) {
+        const worst = td.buckling.reduce((a,b) => b.status === 'helical' ? b :
+                      (a.status === 'helical' ? a : b), {status:'ok'});
+        const bc = worst.status === 'helical' ? 'danger' : worst.status === 'sinusoidal' ? 'warn' : 'ok';
+        const bl = { ok:'Нет изгиба', sinusoidal:'Синус. изгиб', helical:'Спир. изгиб' };
+        cards += kpiCard('Изгиб', bl[worst.status] || '—', '', '', bc);
+    }
+    if (td && td.stuck_pipe) {
+        const highCount = td.stuck_pipe.filter(s => s.risk === 'high').length;
+        const sc = highCount > 0 ? 'danger' : 'ok';
+        cards += kpiCard('Прихват (высокий риск)', highCount, 'уч.', '', sc);
+    }
+
+    grid.innerHTML = cards || '<div class="kpi-card"><div class="kpi-label">Нет данных</div></div>';
+
+    // Stuck pipe section
+    if (td && td.stuck_pipe) renderStuckPipe(td.stuck_pipe);
+    // Alerts auto-check
+    checkAlerts();
+}
+
+function kpiCard(label, value, unit, delta, cls) {
+    return `<div class="kpi-card ${cls}">
+        <div class="kpi-label">${label}</div>
+        <div class="kpi-value">${value}<span class="kpi-unit">${unit}</span></div>
+        ${delta ? `<div class="kpi-delta">${delta}</div>` : ''}
+    </div>`;
+}
+
+
+// ════════════════════════════════════════════════════════════
+// СИСТЕМА ПРЕДУПРЕЖДЕНИЙ
+// ════════════════════════════════════════════════════════════
+
+function checkAlerts() {
+    const td    = state.results.torqueDrag;
+    const reach = state.results.reachability;
+    if (!td && !reach) return;
+
+    const hl_pooh = td?.hookload_pooh ?? 0;
+    const hl_rih  = td?.hookload_rih  ?? 0;
+    const torq    = td?.torque_surface ?? 0;
+    const drag    = td?.total_drag_pooh ?? 0;
+
+    setAlert('alert-st-hookload-pooh',
+        hl_pooh, parseFloat(document.getElementById('alert-hookload-pooh').value));
+    const rihLimit = parseFloat(document.getElementById('alert-hookload-rih').value);
+    if (rihLimit > 0)
+        setAlert('alert-st-hookload-rih', hl_rih, rihLimit);
+    else
+        document.getElementById('alert-st-hookload-rih').innerHTML = '—';
+    setAlert('alert-st-torque',
+        torq, parseFloat(document.getElementById('alert-torque').value));
+    setAlert('alert-st-drag',
+        drag, parseFloat(document.getElementById('alert-drag').value));
+}
+
+function setAlert(elId, actual, limit) {
+    const el = document.getElementById(elId);
+    if (!el || isNaN(limit)) return;
+    if (actual > limit) {
+        el.innerHTML = `<span class="alert-fired">⚠ ${actual.toFixed(1)}</span>`;
+    } else {
+        el.innerHTML = `<span class="alert-ok">OK ${actual.toFixed(1)}</span>`;
+    }
+}
+
+
+// ════════════════════════════════════════════════════════════
+// ПРИХВАТ ТРУБЫ
+// ════════════════════════════════════════════════════════════
+
+function renderStuckPipe(riskData) {
+    const container = document.getElementById('stuck-pipe-content');
+    if (!container) return;
+
+    const highCount = riskData.filter(r => r.risk === 'high').length;
+    const midCount  = riskData.filter(r => r.risk === 'medium').length;
+
+    let html = `<div class="stats-row" style="margin-bottom:16px">
+        <div class="stat-card">
+            <div class="stat-label">Высокий риск</div>
+            <div class="stat-value" style="color:${highCount>0?'var(--danger)':'var(--success)'}">
+                ${highCount}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Средний риск</div>
+            <div class="stat-value" style="color:${midCount>0?'var(--warning)':'var(--text-primary)'}">
+                ${midCount}
+            </div>
+        </div>
+    </div>`;
+
+    // Bar chart: N/L по элементам
+    const names  = riskData.map(r => r.name);
+    const nPerM  = riskData.map(r => r.N_per_m);
+    const colors = riskData.map(r =>
+        r.risk === 'high' ? '#ff1744' : r.risk === 'medium' ? '#ffab00' : '#00c853');
+
+    html += `<div class="chart-container" id="stuck-chart" style="min-height:220px;margin-bottom:16px"></div>`;
+
+    html += `<div class="table-wrap"><table class="data-table">
+        <thead><tr>
+            <th>Элемент</th><th>Глубина (м)</th><th>N (кН)</th>
+            <th>N/L (кН/м)</th><th>Угол (°)</th><th>Риск</th>
+        </tr></thead><tbody>`;
+
+    riskData.forEach(r => {
+        const badge = `<span class="risk-badge ${r.risk}">
+            ${r.risk==='high'?'Высокий':r.risk==='medium'?'Средний':'Низкий'}
+        </span>`;
+        html += `<tr><td>${r.name}</td><td>${r.top}–${r.bottom}</td>
+            <td>${r.N}</td><td>${r.N_per_m}</td><td>${r.incl}</td><td>${badge}</td></tr>`;
+    });
+
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+
+    // Render bar chart
+    setTimeout(() => {
+        _plot('stuck-chart', [{
+            x: nPerM, y: names,
+            type: 'bar', orientation: 'h',
+            marker: { color: colors },
+            name: 'N/L (кН/м)',
+        }], {
+            xaxis: { title: 'Удельная нормальная нагрузка N/L (кН/м)' },
+            yaxis: { autorange: 'reversed', automargin: true },
+            margin: { l: 160, r: 20, t: 20, b: 50 },
+            height: Math.max(220, riskData.length * 32 + 60),
+            shapes: [
+                { type: 'line', x0: 1, x1: 1, y0: -0.5, y1: riskData.length - 0.5,
+                  line: { color: '#ffab00', width: 1.5, dash: 'dot' } },
+                { type: 'line', x0: 3, x1: 3, y0: -0.5, y1: riskData.length - 0.5,
+                  line: { color: '#ff1744', width: 1.5, dash: 'dot' } },
+            ],
+        });
+    }, 50);
+}
+
+
+// ════════════════════════════════════════════════════════════
+// КАЛИБРОВКА КОЭФФИЦИЕНТА ТРЕНИЯ
+// ════════════════════════════════════════════════════════════
+
+function addCalibRow(depth, hl) {
+    const tbody = document.getElementById('calib-tbody');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+        <td><input type="number" step="any" value="${depth??''}" placeholder="0"></td>
+        <td><input type="number" step="any" value="${hl??''}"    placeholder="0"></td>
+        <td><button class="btn-row-delete" onclick="this.closest('tr').remove()">&times;</button></td>`;
+    tbody.appendChild(tr);
+}
+
+function loadSampleCalib() {
+    document.getElementById('calib-tbody').innerHTML = '';
+    [[500,60],[1000,120],[1500,180],[2000,250],[2500,330],[3000,420]].forEach(
+        ([d,h]) => addCalibRow(d, h));
+}
+
+function getCalibData() {
+    const rows = document.getElementById('calib-tbody').rows;
+    const data = [];
+    for (const r of rows) {
+        const ins = r.querySelectorAll('input');
+        const d = parseFloat(ins[0].value), h = parseFloat(ins[1].value);
+        if (!isNaN(d) && !isNaN(h)) data.push({ depth: d, hookload: h });
+    }
+    return data;
+}
+
+async function runCalibration() {
+    const fieldData = getCalibData();
+    if (!fieldData.length) { showError('Добавьте полевые замеры'); return; }
+    const td = parseFloat(document.getElementById('calib-depth').value);
+    if (!td) { showError('Укажите целевую глубину'); return; }
+
+    const survey   = getSurveyData();
+    const assembly = getAssemblyData();
+    if (survey.length < 2) { showError('Введите инклинометрию'); return; }
+    if (!assembly.length)  { showError('Заполните компоновку'); return; }
+
+    document.getElementById('calib-spinner').style.display = '';
+    document.getElementById('btn-calibrate').disabled = true;
+    document.getElementById('calib-results').style.display = 'none';
+
+    try {
+        const res = await apiPost('/api/calibrate/friction', {
+            survey, assembly,
+            target_depth: td,
+            fluid_density: parseFloat(document.getElementById('fluid-density').value) || 1.2,
+            field_data: fieldData,
+            direction: document.getElementById('calib-direction').value,
+        });
+        if (!res.success) { showError(res.error); return; }
+
+        state.calibratedMu = res.mu_calibrated;
+        document.getElementById('calib-results').style.display = '';
+        document.getElementById('calib-mu-val').textContent  = res.mu_calibrated;
+        document.getElementById('calib-rms').textContent     = res.rms_error;
+
+        // Comparison chart
+        const comp = res.comparison;
+        const trMeas = {
+            x: comp.map(c => c.measured),    y: comp.map(c => c.depth),
+            type: 'scatter', mode: 'markers',
+            marker: { color: '#ffab00', size: 9, symbol: 'diamond' },
+            name: 'Измеренный',
+        };
+        const trCalc = {
+            x: res.forces.map(f => f.force), y: res.forces.map(f => f.depth),
+            type: 'scatter', mode: 'lines',
+            line: { color: '#3d5afe', width: 2 },
+            name: `Расчётный (μ=${res.mu_calibrated})`,
+        };
+        _plot('calib-chart', [trMeas, trCalc], {
+            xaxis: { title: 'Нагрузка на крюке (кН)' },
+            yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
+            height: 300,
+        });
+
+        // Comparison table
+        const tbody = document.getElementById('calib-comp-tbody');
+        tbody.innerHTML = '';
+        comp.forEach(c => {
+            const absErr = Math.abs(c.error);
+            const cls = absErr > 20 ? 'color:var(--danger)' :
+                        absErr > 10 ? 'color:var(--warning)' : 'color:var(--success)';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${c.depth}</td><td>${c.measured}</td><td>${c.calculated}</td>
+                <td style="${cls}">${c.error > 0 ? '+' : ''}${c.error}</td>
+                <td style="${cls}">${c.error_pct > 0 ? '+' : ''}${c.error_pct}%</td>`;
+            tbody.appendChild(tr);
+        });
+
+    } catch(e) {
+        showError('Ошибка калибровки: ' + e.message);
+    } finally {
+        document.getElementById('calib-spinner').style.display = 'none';
+        document.getElementById('btn-calibrate').disabled = false;
+    }
+}
+
+function applyCalibration() {
+    if (!state.calibratedMu) return;
+    document.getElementById('mu-open').value  = state.calibratedMu;
+    document.getElementById('mu-cased').value = state.calibratedMu;
+    alert(`Применено μ = ${state.calibratedMu} для открытого ствола и обсадной колонны`);
 }

@@ -297,6 +297,91 @@ def calc_buckling(segments_down):
 
 
 # ════════════════════════════════════════════════════════════
+# ТРАЕКТОРИЯ СКВАЖИНЫ — МЕТОД МИНИМАЛЬНОЙ КРИВИЗНЫ
+# ════════════════════════════════════════════════════════════
+
+def interpolate_value(depths, values, target):
+    """Линейная интерполяция значения на заданной глубине."""
+    if target <= depths[0]:  return values[0]
+    if target >= depths[-1]: return values[-1]
+    for i in range(len(depths) - 1):
+        if depths[i] <= target <= depths[i + 1]:
+            t = (target - depths[i]) / (depths[i + 1] - depths[i])
+            return values[i] + t * (values[i + 1] - values[i])
+    return values[-1]
+
+
+def minimum_curvature(survey):
+    """
+    Координаты скважины методом минимальной кривизны.
+    Возвращает список точек: {md, inc, azi, tvd, north, east, hd, dls}.
+    """
+    pts = [{
+        'md': survey[0]['depth'],
+        'inc': survey[0]['inclination'],
+        'azi': survey[0]['azimuth'],
+        'tvd': 0.0, 'north': 0.0, 'east': 0.0, 'hd': 0.0, 'dls': 0.0,
+    }]
+    for i in range(len(survey) - 1):
+        dl = survey[i + 1]['depth'] - survey[i]['depth']
+        if dl <= 0:
+            continue
+        i1 = math.radians(survey[i]['inclination'])
+        i2 = math.radians(survey[i + 1]['inclination'])
+        a1 = math.radians(survey[i]['azimuth'])
+        a2 = math.radians(survey[i + 1]['azimuth'])
+
+        cos_dg = max(-1.0, min(1.0,
+            math.cos(i1) * math.cos(i2) +
+            math.sin(i1) * math.sin(i2) * math.cos(a2 - a1)))
+        dg  = math.acos(cos_dg)
+        dls = math.degrees(dg) / dl * 30.0
+        rf  = (2.0 / dg * math.tan(dg / 2.0)) if dg > 1e-6 else 1.0
+
+        dtvd  = dl / 2 * (math.cos(i1) + math.cos(i2)) * rf
+        dn    = dl / 2 * (math.sin(i1) * math.cos(a1) + math.sin(i2) * math.cos(a2)) * rf
+        de    = dl / 2 * (math.sin(i1) * math.sin(a1) + math.sin(i2) * math.sin(a2)) * rf
+
+        p = pts[-1]
+        n, e = p['north'] + dn, p['east'] + de
+        pts.append({
+            'md':    survey[i + 1]['depth'],
+            'inc':   survey[i + 1]['inclination'],
+            'azi':   survey[i + 1]['azimuth'],
+            'tvd':   round(p['tvd'] + dtvd, 3),
+            'north': round(n, 3),
+            'east':  round(e, 3),
+            'hd':    round(math.sqrt(n ** 2 + e ** 2), 3),
+            'dls':   round(dls, 3),
+        })
+    return pts
+
+
+def calc_stuck_pipe_risk(segments):
+    """
+    Оценка риска прихвата по удельной нормальной нагрузке N/L (кН/м):
+      Низкий:    N/L < 1.0
+      Средний:   1.0 ≤ N/L < 3.0
+      Высокий:   N/L ≥ 3.0
+    """
+    result = []
+    for s in segments:
+        L = s['length'] if s['length'] > 0 else 1.0
+        npl = s['N'] / L
+        level = 'low' if npl < 1.0 else ('medium' if npl < 3.0 else 'high')
+        result.append({
+            'name':    s['name'],
+            'top':     s['top'],
+            'bottom':  s['bottom'],
+            'N':       s['N'],
+            'N_per_m': round(npl, 3),
+            'risk':    level,
+            'incl':    round((s['incl_bot'] + s['incl_top']) / 2, 1),
+        })
+    return result
+
+
+# ════════════════════════════════════════════════════════════
 # MATPLOTLIB — ВСПОМОГАТЕЛЬНЫЕ ГРАФИКИ ДЛЯ PDF
 # ════════════════════════════════════════════════════════════
 
@@ -487,12 +572,15 @@ def calc_torque_drag():
                 'od':          od_mm,
             })
 
+        stuck_pipe = calc_stuck_pipe_risk(segs_rih)
+
         return jsonify(
             success=True,
             forces_rih=forces_rih,
             forces_pooh=forces_pooh,
             torque=torque_profile,
             buckling=buckling,
+            stuck_pipe=stuck_pipe,
             hookload_rih=round(hookload_rih, 2),
             hookload_pooh=round(hookload_pooh, 2),
             torque_surface=round(torque_surf, 2),
@@ -521,12 +609,50 @@ def upload_survey():
             return jsonify(success=False, error="Файл не выбран")
 
         ext = os.path.splitext(f.filename)[1].lower()
+
+        # ── WITSML XML ──────────────────────────────────────────
+        if ext == '.xml':
+            import xml.etree.ElementTree as ET
+            tree = ET.parse(f)
+            root = tree.getroot()
+            # Определяем namespace
+            ns = ''
+            for elem in root.iter():
+                if '}' in elem.tag:
+                    ns = elem.tag[:elem.tag.index('}') + 1]
+                    break
+            stations = (root.findall(f'.//{ns}trajStation') or
+                        root.findall('.//trajStation'))
+            if not stations:
+                return jsonify(success=False,
+                               error="WITSML: не найдены элементы <trajStation>")
+            survey = []
+            for st in stations:
+                md_el  = st.find(f'{ns}md')   or st.find('md')
+                inc_el = st.find(f'{ns}incl') or st.find('incl')
+                azi_el = st.find(f'{ns}azi')  or st.find('azi')
+                if None in (md_el, inc_el, azi_el):
+                    continue
+                survey.append({
+                    'depth':       float(md_el.text),
+                    'inclination': float(inc_el.text),
+                    'azimuth':     float(azi_el.text),
+                })
+            if not survey:
+                return jsonify(success=False,
+                               error="WITSML: не удалось извлечь данные замеров")
+            validate_survey(survey)
+            return jsonify(success=True, survey=survey, rows=len(survey),
+                           source='witsml')
+
+        # ── CSV / Excel ─────────────────────────────────────────
         if ext == '.csv':
             df = pd.read_csv(f)
         elif ext in ('.xlsx', '.xls'):
             df = pd.read_excel(f)
         else:
-            return jsonify(success=False, error="Поддерживаются только CSV и Excel (.xlsx)")
+            return jsonify(success=False,
+                           error="Поддерживаются форматы: CSV, Excel (.xlsx), WITSML (.xml)")
 
         col_map = {}
         for col in df.columns:
@@ -763,6 +889,99 @@ def _make_chart_image(forces, title, ylabel='Осевая нагрузка (кН
     plt.close(fig)
     buf.seek(0)
     return buf
+
+
+@app.route('/api/calculate/trajectory', methods=['POST'])
+def calc_trajectory():
+    """Минимальная кривизна — координаты скважины (TVD, N, E, горизонтальное расстояние)."""
+    try:
+        data = request.get_json()
+        survey = data['survey']
+        validate_survey(survey)
+        pts = minimum_curvature(survey)
+        return jsonify(
+            success=True,
+            points=pts,
+            max_tvd=round(max(p['tvd'] for p in pts), 1),
+            max_hd=round(max(p['hd'] for p in pts), 1),
+            max_dls=round(max(p['dls'] for p in pts), 2),
+        )
+    except (ValueError, KeyError) as e:
+        return jsonify(success=False, error=str(e))
+    except Exception as e:
+        return jsonify(success=False, error=f"Ошибка расчёта траектории: {e}")
+
+
+@app.route('/api/calibrate/friction', methods=['POST'])
+def calibrate_friction():
+    """
+    Калибровка коэффициента трения по полевым замерам нагрузки на крюке.
+    Метод: минимизация RMS-отклонения расчётных значений от измеренных.
+    """
+    try:
+        data          = request.get_json()
+        survey        = data['survey']
+        assembly      = data['assembly']
+        target_depth  = float(data['target_depth'])
+        fluid_density = float(data['fluid_density'])
+        field_data    = data['field_data']   # [{depth, hookload}, ...]
+        direction     = data.get('direction', 'up')
+
+        if not field_data:
+            raise ValueError("Нет полевых замеров для калибровки")
+        validate_survey(survey)
+        validate_assembly(assembly)
+
+        def rms(mu_val):
+            frc, _ = johancsik_run(assembly, survey, target_depth,
+                                   fluid_density, mu_val, [], direction=direction)
+            ds = [f['depth'] for f in frc]
+            vs = [f['force'] for f in frc]
+            return math.sqrt(
+                sum((interpolate_value(ds, vs, fm['depth']) - fm['hookload']) ** 2
+                    for fm in field_data) / len(field_data))
+
+        # Грубый поиск (шаг 0.05, диапазон 0.05–0.80)
+        best_mu, best_rms = 0.25, float('inf')
+        for mu in [i * 0.05 for i in range(1, 17)]:
+            r = rms(mu)
+            if r < best_rms:
+                best_rms, best_mu = r, mu
+
+        # Точный поиск (шаг 0.005)
+        for mu in [best_mu + i * 0.005 for i in range(-8, 9)]:
+            mu = max(0.05, min(0.80, mu))
+            r = rms(mu)
+            if r < best_rms:
+                best_rms, best_mu = r, mu
+
+        frc_f, _ = johancsik_run(assembly, survey, target_depth,
+                                  fluid_density, best_mu, [], direction=direction)
+        ds = [f['depth'] for f in frc_f]
+        vs = [f['force'] for f in frc_f]
+        comp = []
+        for fm in field_data:
+            calc = interpolate_value(ds, vs, fm['depth'])
+            comp.append({
+                'depth':      fm['depth'],
+                'measured':   fm['hookload'],
+                'calculated': round(calc, 2),
+                'error':      round(calc - fm['hookload'], 2),
+                'error_pct':  round((calc - fm['hookload']) / fm['hookload'] * 100, 1)
+                              if fm['hookload'] != 0 else 0,
+            })
+
+        return jsonify(
+            success=True,
+            mu_calibrated=round(best_mu, 4),
+            rms_error=round(best_rms, 2),
+            comparison=comp,
+            forces=frc_f,
+        )
+    except (ValueError, KeyError) as e:
+        return jsonify(success=False, error=str(e))
+    except Exception as e:
+        return jsonify(success=False, error=f"Ошибка калибровки: {e}")
 
 
 @app.route('/api/export/pdf', methods=['POST'])
