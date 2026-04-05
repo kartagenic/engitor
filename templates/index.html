@@ -486,11 +486,20 @@
                 <p class="page-subtitle">2D и 3D траектория скважины, профиль кривизны</p>
             </div>
             <div class="content">
-                <div class="btn-group" style="margin-bottom:20px">
-                    <button class="btn btn-primary" id="btn-build-traj" onclick="buildTrajectory()">
-                        Построить траекторию
-                    </button>
-                    <span id="traj-spinner" class="spinner" style="display:none"></span>
+                <div id="viz-empty-state" class="empty-state-card">
+                    <div class="empty-state-icon">◎</div>
+                    <h3 class="empty-state-title">Нет данных инклинометрии</h3>
+                    <p class="empty-state-text">Введите точки инклинометрии на вкладке <strong>Скважина</strong>, затем вернитесь сюда для построения траектории.</p>
+                    <button class="btn btn-secondary" onclick="goToTab('well')">Перейти к Скважине</button>
+                </div>
+
+                <div id="viz-has-data" style="display:none">
+                    <div class="btn-group" style="margin-bottom:20px">
+                        <button class="btn btn-primary" id="btn-build-traj" onclick="buildTrajectory()">
+                            Построить траекторию
+                        </button>
+                        <span id="traj-spinner" class="spinner" style="display:none"></span>
+                    </div>
                 </div>
 
                 <div id="viz-results" style="display:none">
@@ -751,6 +760,8 @@
 
     </main>
 </div>
+
+<div id="toast-container" aria-live="polite"></div>
 
 <script src="/static/js/app.js"></script>
 </body>

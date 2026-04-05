@@ -98,6 +98,11 @@ const plotlyConfig = { responsive: true, displaylogo: false, modeBarButtonsToRem
 // НАВИГАЦИЯ
 // ════════════════════════════════════════════════════════════
 
+function goToTab(tabName) {
+    const item = document.querySelector(`.nav-item[data-tab="${tabName}"]`);
+    if (item) item.click();
+}
+
 document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', () => {
         document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -105,12 +110,20 @@ document.querySelectorAll('.nav-item').forEach(item => {
         item.classList.add('active');
         document.getElementById('tab-' + item.dataset.tab).classList.add('active');
 
-        if (item.dataset.tab === 'calculations') { updatePackerSelect(); syncTdDepth(); }
-        if (item.dataset.tab === 'export')        updateStatusChecklist();
-        if (item.dataset.tab === 'assembly')      updateAssemblySummary();
-        if (item.dataset.tab === 'analytics')     refreshAnalytics();
+        if (item.dataset.tab === 'calculations')  { updatePackerSelect(); syncTdDepth(); }
+        if (item.dataset.tab === 'export')         updateStatusChecklist();
+        if (item.dataset.tab === 'assembly')       updateAssemblySummary();
+        if (item.dataset.tab === 'analytics')      refreshAnalytics();
+        if (item.dataset.tab === 'visualization')  onVizTabOpen();
     });
 });
+
+function onVizTabOpen() {
+    const hasSurvey = getSurveyData().length >= 2;
+    document.getElementById('viz-empty-state').style.display = hasSurvey ? 'none' : '';
+    document.getElementById('viz-has-data').style.display    = hasSurvey ? ''     : 'none';
+    if (hasSurvey && !_vizData) buildTrajectory();
+}
 
 
 // ════════════════════════════════════════════════════════════
@@ -391,9 +404,24 @@ function collectRequestData(targetDepth) {
     };
 }
 
-function showError(msg) {
-    alert(msg);
+function showToast(msg, type = 'error', duration = 5000) {
+    const icons = { error: '✕', success: '✓', info: 'ℹ' };
+    const container = document.getElementById('toast-container');
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    el.innerHTML = `<span class="toast-icon">${icons[type] || '!'}</span>` +
+                   `<span class="toast-msg">${msg}</span>` +
+                   `<span class="toast-close" onclick="this.parentElement.remove()">×</span>`;
+    container.appendChild(el);
+    setTimeout(() => {
+        el.style.animation = 'toast-out 0.25s ease forwards';
+        setTimeout(() => el.remove(), 260);
+    }, duration);
 }
+
+function showError(msg)   { showToast(msg, 'error'); }
+function showSuccess(msg) { showToast(msg, 'success'); }
+function showInfo(msg)    { showToast(msg, 'info'); }
 
 async function apiPost(url, data) {
     const resp = await fetch(url, {
