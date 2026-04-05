@@ -61,6 +61,10 @@
             <span id="theme-toggle-label">Светлая тема</span>
             <span class="theme-toggle-track"><span class="theme-toggle-thumb"></span></span>
         </button>
+        <button class="theme-toggle" onclick="toggleUnits()" id="units-toggle-btn" style="margin-top:6px">
+            <span id="units-toggle-label">Field Units</span>
+            <span class="theme-toggle-track"><span id="units-toggle-thumb" class="theme-toggle-thumb"></span></span>
+        </button>
         <div class="sidebar-footer">
             WellMech v1.0<br>Модель Johancsik, 1984
         </div>
@@ -98,7 +102,7 @@
                                     <thead>
                                         <tr>
                                             <th style="width:40px">№</th>
-                                            <th>Глубина (м)</th>
+                                            <th>Глубина (<span class="unit-lbl" data-unit="depth">м</span>)</th>
                                             <th>Зенитный угол (°)</th>
                                             <th>Азимут (°)</th>
                                             <th style="width:36px"></th>
@@ -131,9 +135,9 @@
                     <div class="card-body">
                         <div class="form-row cols-3">
                             <div class="form-group">
-                                <label class="form-label">Плотность раствора (г/см³)</label>
+                                <label class="form-label">Плотность раствора (<span class="unit-lbl" data-unit="dens">г/см³</span>)</label>
                                 <input type="number" class="form-input" id="fluid-density"
-                                       value="1.20" step="0.01" min="0.8" max="2.5">
+                                       value="1.20" step="0.01" min="0.8" max="2.5" data-unit-type="dens">
                             </div>
                         </div>
                     </div>
@@ -145,17 +149,41 @@
                         <span class="card-title">Коэффициент трения</span>
                     </div>
                     <div class="card-body">
-                        <div class="form-row cols-2">
+                        <div class="form-row cols-3">
                             <div class="form-group">
-                                <label class="form-label">Открытый ствол (μ)</label>
-                                <input type="number" class="form-input" id="mu-open"
+                                <label class="form-label">μ₁ Открытый ствол</label>
+                                <input type="number" class="form-input" id="mu-openhole"
                                        value="0.25" step="0.01" min="0.05" max="0.8">
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Обсадная колонна (μ)</label>
+                                <label class="form-label">μ₂ Обсадная колонна</label>
                                 <input type="number" class="form-input" id="mu-cased"
                                        value="0.20" step="0.01" min="0.05" max="0.8">
                             </div>
+                            <div class="form-group">
+                                <label class="form-label">μ₃ Хвостовик / Рисер</label>
+                                <input type="number" class="form-input" id="mu-liner"
+                                       value="0.15" step="0.01" min="0.05" max="0.8">
+                            </div>
+                        </div>
+                        <div class="separator"></div>
+                        <div style="margin-bottom:8px">
+                            <span class="form-label" style="display:inline">Башмаки (глубины)</span>
+                        </div>
+                        <div class="form-row cols-2">
+                            <div class="form-group">
+                                <label class="form-label">Башмак ОК (<span class="unit-lbl" data-unit="depth">м</span>)</label>
+                                <input type="number" class="form-input" id="shoe-casing"
+                                       placeholder="Глубина башмака ОК" step="1" min="0" data-unit-type="depth">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Кровля хвостовика (<span class="unit-lbl" data-unit="depth">м</span>)</label>
+                                <input type="number" class="form-input" id="shoe-liner"
+                                       placeholder="Глубина кровли хвостовика" step="1" min="0" data-unit-type="depth">
+                            </div>
+                        </div>
+                        <div class="btn-group" style="margin-bottom:10px;margin-top:4px">
+                            <button class="btn btn-secondary btn-sm" onclick="updateMuZones()">Обновить зоны</button>
                         </div>
                         <div class="separator"></div>
                         <div style="margin-bottom:8px">
@@ -171,8 +199,8 @@
                             <table class="data-table" id="mu-table">
                                 <thead>
                                     <tr>
-                                        <th>Глубина от (м)</th>
-                                        <th>Глубина до (м)</th>
+                                        <th>Глубина от (<span class="unit-lbl" data-unit="depth">м</span>)</th>
+                                        <th>Глубина до (<span class="unit-lbl" data-unit="depth">м</span>)</th>
                                         <th>μ</th>
                                         <th style="width:36px"></th>
                                     </tr>
@@ -212,10 +240,11 @@
                                     <tr>
                                         <th style="width:36px">№</th>
                                         <th style="min-width:140px">Название элемента</th>
-                                        <th>Длина (м)</th>
-                                        <th>Вес в воздухе (кг)</th>
-                                        <th>Нар. диаметр (мм)</th>
-                                        <th>Макс. нагрузка (кН)</th>
+                                        <th>Длина (<span class="unit-lbl" data-unit="depth">м</span>)</th>
+                                        <th>Вес в воздухе (<span class="unit-lbl" data-unit="weight">кг</span>)</th>
+                                        <th>Нар. диаметр (<span class="unit-lbl" data-unit="od">мм</span>)</th>
+                                        <th>Лин. вес (<span class="unit-lbl" data-unit="linwt">кг/м</span>)</th>
+                                        <th>Макс. нагрузка (<span class="unit-lbl" data-unit="force">кН</span>)</th>
                                         <th style="width:36px"></th>
                                     </tr>
                                 </thead>
@@ -243,8 +272,85 @@
                                 <div class="stat-value" id="buoyed-weight">0<span class="stat-unit">кН</span></div>
                             </div>
                             <div class="stat-card">
+                                <div class="stat-label">Верт. вес (с инкл.)</div>
+                                <div class="stat-value" id="vert-weight">—<span class="stat-unit">кН</span></div>
+                            </div>
+                            <div class="stat-card">
                                 <div class="stat-label">Элементов</div>
                                 <div class="stat-value" id="total-elements">0</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- API 5CT Card -->
+                <div class="card" id="api5ct-card">
+                    <div class="card-header">
+                        <span class="card-title">Подбор обсадных труб API 5CT</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-row cols-3" style="margin-bottom:12px">
+                            <div class="form-group">
+                                <label class="form-label">OD (дюйм)</label>
+                                <select class="form-input" id="api5ct-od-filter" onchange="filterApi5ct()">
+                                    <option value="">Все</option>
+                                    <option>2.375</option><option>2.875</option><option>3.5</option>
+                                    <option>4.5</option><option>5.0</option><option>5.5</option>
+                                    <option>7.0</option><option>7.625</option><option>9.625</option>
+                                    <option>10.75</option><option>13.375</option><option>18.625</option>
+                                    <option>20.0</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Марка стали</label>
+                                <select class="form-input" id="api5ct-grade-filter" onchange="filterApi5ct()">
+                                    <option value="">Все</option>
+                                    <option>H40</option><option>J55</option><option>K55</option>
+                                    <option>N80</option><option>L80</option><option>C95</option>
+                                    <option>P110</option><option>Q125</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Тип резьбы</label>
+                                <select class="form-input" id="api5ct-type-filter" onchange="filterApi5ct()">
+                                    <option value="">Все</option>
+                                    <option>STC</option><option>LTC</option><option>BTC</option>
+                                    <option>EUE</option><option>NUE</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="table-wrap">
+                            <table class="data-table" id="api5ct-table">
+                                <thead>
+                                    <tr>
+                                        <th>OD (дюйм/мм)</th>
+                                        <th>Вес (lb/ft)</th>
+                                        <th>Марка</th>
+                                        <th>Толщина ст. (мм)</th>
+                                        <th>Резьба</th>
+                                        <th>F тело (кН)</th>
+                                        <th>F резьба (кН)</th>
+                                        <th>P разрыв (МПа)</th>
+                                        <th>P смятие (МПа)</th>
+                                        <th style="width:36px"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="api5ct-tbody"></tbody>
+                            </table>
+                        </div>
+                        <div id="api5ct-detail" style="display:none;margin-top:16px">
+                            <div class="card-header" style="padding:0 0 8px 0">
+                                <span class="card-title" style="font-size:13px">Выбранная труба</span>
+                            </div>
+                            <div id="api5ct-detail-content"></div>
+                            <div style="margin-top:12px">
+                                <input type="text" class="form-input" id="api5ct-element-name"
+                                       placeholder="Название элемента компоновки" style="max-width:300px;margin-right:8px">
+                                <input type="number" class="form-input" id="api5ct-element-len"
+                                       placeholder="Длина (м)" style="max-width:120px;margin-right:8px" step="any" min="0">
+                                <button class="btn btn-secondary btn-sm" onclick="addApi5ctToAssembly()">
+                                    Применить в компоновку
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -272,9 +378,9 @@
                         <div class="accordion-body">
                             <div class="form-row cols-3">
                                 <div class="form-group">
-                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <label class="form-label">Целевая глубина (<span class="unit-lbl" data-unit="depth">м</span>)</label>
                                     <input type="number" class="form-input" id="reach-target-depth"
-                                           placeholder="3000" step="1" min="0">
+                                           placeholder="3000" step="1" min="0" data-unit-type="depth">
                                 </div>
                             </div>
                             <div class="btn-group" style="margin-top:8px">
@@ -327,9 +433,9 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
-                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <label class="form-label">Целевая глубина (<span class="unit-lbl" data-unit="depth">м</span>)</label>
                                     <input type="number" class="form-input" id="packer-target-depth"
-                                           placeholder="3000" step="1" min="0">
+                                           placeholder="3000" step="1" min="0" data-unit-type="depth">
                                 </div>
                             </div>
                             <div class="btn-group" style="margin-top:8px">
@@ -366,9 +472,9 @@
                         <div class="accordion-body">
                             <div class="form-row cols-3">
                                 <div class="form-group">
-                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <label class="form-label">Целевая глубина (<span class="unit-lbl" data-unit="depth">м</span>)</label>
                                     <input type="number" class="form-input" id="hook-target-depth"
-                                           placeholder="3000" step="1" min="0">
+                                           placeholder="3000" step="1" min="0" data-unit-type="depth">
                                 </div>
                             </div>
                             <div class="btn-group" style="margin-top:8px">
@@ -408,9 +514,9 @@
                         <div class="accordion-body">
                             <div class="form-row cols-3">
                                 <div class="form-group">
-                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <label class="form-label">Целевая глубина (<span class="unit-lbl" data-unit="depth">м</span>)</label>
                                     <input type="number" class="form-input" id="td-target-depth"
-                                           placeholder="3000" step="1" min="0">
+                                           placeholder="3000" step="1" min="0" data-unit-type="depth">
                                 </div>
                             </div>
                             <div class="btn-group" style="margin-top:8px">
