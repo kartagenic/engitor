@@ -36,12 +36,9 @@ function fromSI(val, type) {
 function toggleUnits() {
     unitSystem = unitSystem === 'si' ? 'field' : 'si';
     localStorage.setItem('wm-units', unitSystem);
-    applyUnitLabels();
+    applyUnitLabels();   // also updates thumb position
     convertInputValues();
     updateAssemblySummary();
-    // Update toggle thumb visual
-    const thumb = document.getElementById('units-toggle-thumb');
-    if (thumb) thumb.style.transform = unitSystem === 'field' ? 'translateX(20px)' : '';
 }
 
 function applyUnitLabels() {
@@ -50,14 +47,12 @@ function applyUnitLabels() {
         const type = el.getAttribute('data-unit');
         if (UNITS[unitSystem][type]) el.textContent = UNITS[unitSystem][type];
     });
-    // Update toggle button label
+    // Toggle label shows CURRENT active system
     const lbl = document.getElementById('units-toggle-label');
-    if (lbl) lbl.textContent = unitSystem === 'field' ? 'SI единицы' : 'Field Units';
-    // Stat card units
-    const totalLengthEl = document.getElementById('total-length');
-    if (totalLengthEl) {
-        // will be re-rendered by updateAssemblySummary
-    }
+    if (lbl) lbl.textContent = unitSystem === 'field' ? 'Field Units' : 'SI';
+    // Thumb position: right = field active
+    const thumb = document.getElementById('units-toggle-thumb');
+    if (thumb) thumb.style.transform = unitSystem === 'field' ? 'translateX(20px)' : '';
 }
 
 function convertInputValues() {
@@ -79,11 +74,13 @@ function convertInputValues() {
     const asmRows = document.getElementById('assembly-tbody').rows;
     for (const row of asmRows) {
         const inputs = row.querySelectorAll('input[type="number"]');
-        // number inputs only: [0]=len(depth), [1]=weight, [2]=od, [3]=wtPerUnit(linwt), [4]=maxLoad(force)
+        // [0]=len(depth), [1]=weight, [2]=od, [3]=wtPerUnit(linwt), [4]=maxLoad(force)
         const types = ['depth', 'weight', 'od', 'linwt', 'force'];
         inputs.forEach((inp, i) => {
             const type = types[i];
             if (!type) return;
+            // Don't convert auto-calculated maxLoad — recalculate it instead
+            if (i === 4 && inp.dataset.auto === 'true') { inp.value = ''; return; }
             const val = parseFloat(inp.value);
             if (!isNaN(val) && val !== 0) {
                 if (unitSystem === 'field') {
@@ -93,6 +90,8 @@ function convertInputValues() {
                 }
             }
         });
+        // Re-trigger auto-calc of maxLoad after unit switch
+        autoCalcMaxLoad(row);
     }
     // Convert survey depth column
     const surveyRows = document.getElementById('survey-tbody').rows;
@@ -128,9 +127,7 @@ function convertInputValues() {
 
 // Init unit system on load
 (function initUnits() {
-    applyUnitLabels();
-    const thumb = document.getElementById('units-toggle-thumb');
-    if (thumb) thumb.style.transform = unitSystem === 'field' ? 'translateX(20px)' : '';
+    applyUnitLabels();  // sets label text + thumb position
 })();
 
 // ── Состояние приложения ──
@@ -466,9 +463,120 @@ function updateMuZones() {
 // КОМПОНОВКА
 // ════════════════════════════════════════════════════════════
 
-function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit) {
+// ════════════════════════════════════════════════════════════
+// МАРКИ СТАЛИ — API 5CT / API 5DP
+// ════════════════════════════════════════════════════════════
+
+// yield_ksi = minimum yield strength, thread_factor = fraction of pipe-body yield
+const STEEL_GRADES = {
+    // ── API 5CT — Обсадные и насосно-компрессорные трубы ──
+    'H40':      { yield_ksi: 40,  label: 'H40  (API 5CT)',       tf: 0.60 },
+    'J55':      { yield_ksi: 55,  label: 'J55  (API 5CT)',       tf: 0.65 },
+    'K55':      { yield_ksi: 55,  label: 'K55  (API 5CT)',       tf: 0.70 },
+    'M65':      { yield_ksi: 65,  label: 'M65  (API 5CT)',       tf: 0.70 },
+    'N80-1':    { yield_ksi: 80,  label: 'N80-1 (API 5CT)',      tf: 0.80 },
+    'N80-Q':    { yield_ksi: 80,  label: 'N80-Q (API 5CT)',      tf: 0.80 },
+    'L80-1':    { yield_ksi: 80,  label: 'L80-1 (API 5CT)',      tf: 0.80 },
+    'L80-9Cr':  { yield_ksi: 80,  label: 'L80-9Cr (API 5CT)',    tf: 0.80 },
+    'L80-13Cr': { yield_ksi: 80,  label: 'L80-13Cr (API 5CT)',   tf: 0.80 },
+    'C90-1':    { yield_ksi: 90,  label: 'C90-1 (API 5CT)',      tf: 0.80 },
+    'R95':      { yield_ksi: 95,  label: 'R95  (API 5CT)',       tf: 0.80 },
+    'T95-1':    { yield_ksi: 95,  label: 'T95-1 (API 5CT)',      tf: 0.82 },
+    'T95-2':    { yield_ksi: 95,  label: 'T95-2 (API 5CT)',      tf: 0.82 },
+    'C95':      { yield_ksi: 95,  label: 'C95  (API 5CT)',       tf: 0.80 },
+    'P110':     { yield_ksi: 110, label: 'P110 (API 5CT)',       tf: 0.85 },
+    'Q125-1':   { yield_ksi: 125, label: 'Q125-1 (API 5CT)',     tf: 0.85 },
+    'Q125-2':   { yield_ksi: 125, label: 'Q125-2 (API 5CT)',     tf: 0.85 },
+    'Q125-3':   { yield_ksi: 125, label: 'Q125-3 (API 5CT)',     tf: 0.85 },
+    'Q125-4':   { yield_ksi: 125, label: 'Q125-4 (API 5CT)',     tf: 0.85 },
+    // ── Нержавеющие / коррозионностойкие ──
+    '13Cr-80':  { yield_ksi: 80,  label: '13Cr-80 (13% Cr)',     tf: 0.80 },
+    '13Cr-95':  { yield_ksi: 95,  label: 'S-13Cr-95 (Super 13Cr)',tf: 0.82 },
+    '13Cr-110': { yield_ksi: 110, label: 'S-13Cr-110 (Super 13Cr)',tf:0.82 },
+    '22Cr':     { yield_ksi: 90,  label: '22Cr Duplex',          tf: 0.80 },
+    '25Cr':     { yield_ksi: 100, label: '25Cr Super Duplex',    tf: 0.80 },
+    // ── API 5DP — Бурильные трубы ──
+    'E-75':     { yield_ksi: 75,  label: 'E-75  (API 5DP)',      tf: 0.75 },
+    'X-95':     { yield_ksi: 95,  label: 'X-95  (API 5DP)',      tf: 0.78 },
+    'G-105':    { yield_ksi: 105, label: 'G-105 (API 5DP)',      tf: 0.80 },
+    'S-135':    { yield_ksi: 135, label: 'S-135 (API 5DP)',      tf: 0.80 },
+    'Z-140':    { yield_ksi: 140, label: 'Z-140 (API 5DP)',      tf: 0.82 },
+    'V-150':    { yield_ksi: 150, label: 'V-150 (API 5DP)',      tf: 0.82 },
+    // ── ТУ / нестандартные ──
+    'ВМ':       { yield_ksi: 80,  label: 'ВМ (Россия)',          tf: 0.75 },
+    'ДП':       { yield_ksi: 95,  label: 'ДП (Россия)',          tf: 0.78 },
+};
+
+const _GRADE_OPTIONS_HTML = '<option value="">— марка —</option>' +
+    Object.entries(STEEL_GRADES).map(([k, g]) =>
+        `<option value="${k}">${g.label}</option>`).join('');
+
+// Connection thread factors (override per-grade default)
+const CONN_FACTORS = { BTC: 0.85, LTC: 0.75, STC: 0.60, EUE: 0.80, NUE: 0.65, 'Drill-TJ': 0.75 };
+
+/**
+ * Auto-calculate pipe body tensile yield and thread capacity.
+ * OD and linwt must be in DISPLAY units (converted from SI if needed).
+ * Returns max load in kN (SI) or null if inputs insufficient.
+ */
+function calcPipeTensile(odDisp, linwtDisp, gradeKey, connKey) {
+    const g = STEEL_GRADES[gradeKey];
+    if (!g || !odDisp || !linwtDisp) return null;
+
+    // Always work in field units for the standard formula
+    const od_in  = unitSystem === 'field' ? odDisp : odDisp / 25.4;    // mm → in
+    const wt_lbft = unitSystem === 'field' ? linwtDisp : linwtDisp / 1.48816; // kg/m → lb/ft
+
+    // Wall thickness from nominal weight (API formula): w = 10.68*(D-t)*t
+    const disc = od_in * od_in - wt_lbft / 2.67;
+    if (disc <= 0) return null;
+    const t_in = (od_in - Math.sqrt(disc)) / 2;
+    if (t_in <= 0 || t_in >= od_in / 2) return null;
+
+    // Pipe body cross-section (in²)
+    const A_in2 = Math.PI * t_in * (od_in - t_in);
+
+    // Pipe body tensile yield (kN)
+    const F_body_kN = A_in2 * g.yield_ksi * 4.448;  // 1 kip = 4.448 kN
+
+    // Thread / connection capacity
+    const tf = CONN_FACTORS[connKey] ?? g.tf;
+    return F_body_kN * tf;  // kN
+}
+
+/**
+ * Trigger auto-calc of max load for a single assembly <tr>.
+ * Reads OD, linwt, grade, conn from that row; writes to maxLoad input.
+ */
+function autoCalcMaxLoad(tr) {
+    const numInputs = tr.querySelectorAll('input[type="number"]');
+    const gradeEl   = tr.querySelector('select.grade-sel');
+    const connEl    = tr.querySelector('select.conn-sel');
+    const maxInp    = numInputs[4];
+    if (!maxInp || !gradeEl || !connEl) return;
+
+    const odDisp    = parseFloat(numInputs[2].value);
+    const linwtDisp = parseFloat(numInputs[3].value);
+    const grade     = gradeEl.value;
+    const conn      = connEl.value;
+
+    if (!grade || !conn || isNaN(odDisp) || isNaN(linwtDisp) || odDisp === 0 || linwtDisp === 0) return;
+
+    const maxKN = calcPipeTensile(odDisp, linwtDisp, grade, conn);
+    if (maxKN === null) return;
+
+    // Display in current unit system
+    const disp = fromSI(maxKN, 'force');
+    maxInp.value = disp.toFixed(1);
+    maxInp.dataset.auto = 'true';
+    updateAssemblySummary();
+}
+
+function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit, grade, conn) {
     const tbody = document.getElementById('assembly-tbody');
     const idx = tbody.rows.length + 1;
+    const gradeVal = grade ?? '';
+    const connVal  = conn  ?? 'BTC';
     const tr = document.createElement('tr');
     tr.innerHTML = `
         <td class="row-num">${idx}</td>
@@ -477,36 +585,64 @@ function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit) {
         <td><input type="number" step="any" value="${weight ?? ''}" placeholder="0"></td>
         <td><input type="number" step="any" value="${od ?? ''}" placeholder="0"></td>
         <td><input type="number" step="any" value="${wtPerUnit ?? ''}" placeholder="0"></td>
-        <td><input type="number" step="any" value="${maxLoad ?? ''}" placeholder="0"></td>
+        <td style="min-width:120px">
+            <select class="form-input grade-sel" style="padding:3px 4px;font-size:11px;width:100%">
+                ${_GRADE_OPTIONS_HTML}
+            </select>
+        </td>
+        <td style="min-width:80px">
+            <select class="form-input conn-sel" style="padding:3px 4px;font-size:11px;width:100%">
+                <option value="BTC">BTC</option>
+                <option value="LTC">LTC</option>
+                <option value="STC">STC</option>
+                <option value="EUE">EUE</option>
+                <option value="NUE">NUE</option>
+                <option value="Drill-TJ">Drill TJ</option>
+            </select>
+        </td>
+        <td><input type="number" step="any" value="${maxLoad ?? ''}" placeholder="авто" title="Заполняется автоматически по марке и OD"></td>
         <td><button class="btn-row-delete" onclick="deleteAssemblyRow(this)">&times;</button></td>
     `;
     tbody.appendChild(tr);
-    // Auto-calculate weight from wtPerUnit if weight empty
+
+    // Set grade/conn values
+    const gradeEl = tr.querySelector('select.grade-sel');
+    const connEl  = tr.querySelector('select.conn-sel');
+    if (gradeVal) gradeEl.value = gradeVal;
+    connEl.value = connVal;
+
+    // Numeric inputs
     const inputs = tr.querySelectorAll('input[type="number"]');
-    const lenInp    = inputs[0]; // index in number inputs: len
+    const lenInp    = inputs[0];
     const weightInp = inputs[1];
-    const wtPuInp   = inputs[3]; // wtPerUnit
-    wtPuInp.addEventListener('input', () => {
-        const l = parseFloat(lenInp.value);
-        const w = parseFloat(weightInp.value);
+    const odInp     = inputs[2];
+    const wtPuInp   = inputs[3];
+
+    // Auto-weight from linwt × length
+    const recalcWeight = () => {
+        const l   = parseFloat(lenInp.value);
+        const w   = parseFloat(weightInp.value);
         const wpu = parseFloat(wtPuInp.value);
         if (!isNaN(l) && !isNaN(wpu) && (isNaN(w) || w === 0)) {
             weightInp.value = (l * wpu).toFixed(1);
-            updateAssemblySummary();
         }
-    });
-    lenInp.addEventListener('input', () => {
-        const l = parseFloat(lenInp.value);
-        const w = parseFloat(weightInp.value);
-        const wpu = parseFloat(wtPuInp.value);
-        if (!isNaN(l) && !isNaN(wpu) && (isNaN(w) || w === 0)) {
-            weightInp.value = (l * wpu).toFixed(1);
-            updateAssemblySummary();
-        }
-    });
+        updateAssemblySummary();
+    };
+    lenInp.addEventListener('input', recalcWeight);
+    wtPuInp.addEventListener('input', recalcWeight);
+
+    // Auto-maxLoad from OD + linwt + grade + conn
+    const recalcMax = () => autoCalcMaxLoad(tr);
+    odInp.addEventListener('input',   recalcMax);
+    wtPuInp.addEventListener('input', recalcMax);
+    gradeEl.addEventListener('change', recalcMax);
+    connEl.addEventListener('change',  recalcMax);
+
+    // Trigger on initial value (e.g. when loading sample)
+    if (gradeVal && connVal && od && wtPerUnit) recalcMax();
 }
 
-function addAssemblyRow() { makeAssemblyRow('', '', '', '', '', ''); }
+function addAssemblyRow() { makeAssemblyRow('', '', '', '', '', '', '', 'BTC'); }
 
 function removeAssemblyRow() {
     const tbody = document.getElementById('assembly-tbody');
@@ -530,16 +666,25 @@ function getAssemblyData() {
     const rows = document.getElementById('assembly-tbody').rows;
     const assembly = [];
     for (const row of rows) {
-        const inputs = row.querySelectorAll('input');
-        // inputs: name(text), len, weight, od, wtPerUnit, maxLoad
-        const nameInp  = inputs[0];
-        const numInputs = row.querySelectorAll('input[type="number"]');
-        const name = nameInp.value || `Элемент ${assembly.length + 1}`;
-        const lenRaw     = parseFloat(numInputs[0].value);
-        const weightRaw  = parseFloat(numInputs[1].value);
-        const odRaw      = parseFloat(numInputs[2].value) || 0;
-        const wtPuRaw    = parseFloat(numInputs[3].value) || 0;
-        const maxLoadRaw = parseFloat(numInputs[4].value);
+        const textInputs = row.querySelectorAll('input[type="text"]');
+        const numInputs  = row.querySelectorAll('input[type="number"]');
+        const gradeEl    = row.querySelector('select.grade-sel');
+        const connEl     = row.querySelector('select.conn-sel');
+
+        const name    = textInputs[0]?.value || `Элемент ${assembly.length + 1}`;
+        const lenRaw  = parseFloat(numInputs[0]?.value);
+        const weightRaw = parseFloat(numInputs[1]?.value);
+        const odRaw   = parseFloat(numInputs[2]?.value) || 0;
+        const wtPuRaw = parseFloat(numInputs[3]?.value) || 0;
+        let maxLoadRaw = parseFloat(numInputs[4]?.value);
+        const grade   = gradeEl?.value || '';
+        const conn    = connEl?.value  || 'BTC';
+
+        // If maxLoad is 0/empty but grade+OD+linwt present — auto-calc in SI
+        if ((isNaN(maxLoadRaw) || maxLoadRaw === 0) && grade && odRaw && wtPuRaw) {
+            const maxKN = calcPipeTensile(odRaw, wtPuRaw, grade, conn);
+            if (maxKN !== null) maxLoadRaw = fromSI(maxKN, 'force');  // in display units
+        }
 
         // Convert to SI
         const len     = isNaN(lenRaw)     ? NaN : toSI(lenRaw, 'depth');
@@ -551,14 +696,14 @@ function getAssemblyData() {
         if (!isNaN(weightRaw) && weightRaw > 0) {
             weight = toSI(weightRaw, 'weight');
         } else if (wtPu > 0 && !isNaN(len)) {
-            // compute from linear weight: kg/m * m = kg
             weight = wtPu * len;
         } else {
             weight = isNaN(weightRaw) ? NaN : 0;
         }
 
         if (!isNaN(len) && !isNaN(weight) && !isNaN(maxLoad)) {
-            assembly.push({ name, length: len, weight_air: weight, od, max_load: maxLoad, weight_per_unit: wtPu });
+            assembly.push({ name, length: len, weight_air: weight, od,
+                            max_load: maxLoad, weight_per_unit: wtPu, grade });
         }
     }
     return assembly;
@@ -618,15 +763,16 @@ function updateAssemblySummary() {
 
 function loadSampleAssembly() {
     document.getElementById('assembly-tbody').innerHTML = '';
-    // [name, len(m), weight(kg), od(mm), maxLoad(kN), wtPerUnit(kg/m)]
+    // [name, len(m), weight(kg), od(mm), maxLoad(kN), wtPerUnit(kg/m), grade, conn]
+    // maxLoad=null → will be auto-calculated from grade+OD+linwt
     const sample = [
-        ['Долото PDC 215.9 мм', 0.3,  45,    215.9, 500,  223.2],
-        ['Забойный двигатель',  9.5,  1800,  172,   800,  283.0],
-        ['КНБК (немагнитная)',  9.0,  450,   171,   700,  74.4],
-        ['УБТ 178×71',          54,   8640,  178,   2400, 238.1],
-        ['Бурильные трубы 127×9.19', 2900, 66700, 127, 1800, 34.2],
+        ['Долото PDC 215.9 мм', 0.3,  45,    215.9, null, 223.2, '',     'BTC'],
+        ['Забойный двигатель',  9.5,  1800,  172,   800,  283.0, '',     'BTC'],
+        ['КНБК (немагнитная)',  9.0,  450,   171,   null, 74.4,  'N80-1','BTC'],
+        ['УБТ 178×71',          54,   8640,  178,   null, 238.1, 'S-135','Drill-TJ'],
+        ['Бурильные трубы 127×9.19', 2900, null, 127, null, 34.2, 'G-105','Drill-TJ'],
     ];
-    sample.forEach(s => makeAssemblyRow(s[0], s[1], s[2], s[3], s[4], s[5]));
+    sample.forEach(s => makeAssemblyRow(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]));
     updateAssemblySummary();
 }
 
