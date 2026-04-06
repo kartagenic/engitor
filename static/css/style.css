@@ -966,6 +966,146 @@ select.form-input {
 [data-theme="light"] .toast.toast-success { background: #f0fff4; color: #2e7d32; }
 [data-theme="light"] .toast.toast-info    { background: #f0f4ff; color: #1565c0; }
 
+/* ════════════════════════════════════════════════════════════
+   PROJECT PANEL
+   ════════════════════════════════════════════════════════════ */
+.project-panel {
+    margin: 6px 0;
+    padding: 8px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+}
+.project-name-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+.project-name-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: var(--font-sans);
+    padding: 4px 7px;
+    outline: none;
+}
+.project-name-input:focus { border-color: var(--border-focus); }
+.project-saved-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.project-btn-row {
+    display: flex;
+    gap: 4px;
+}
+.project-btn-row .btn {
+    flex: 1;
+    font-size: 11px;
+    padding: 4px 6px;
+}
+
+/* ════════════════════════════════════════════════════════════
+   HELP BUTTON & PANEL
+   ════════════════════════════════════════════════════════════ */
+.help-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--text-muted);
+    font-size: 12px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 8px;
+    line-height: 1;
+    transition: background var(--transition), color var(--transition);
+}
+.help-btn:hover { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+.help-panel {
+    display: none;
+    background: var(--accent-dim2);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-top: 10px;
+}
+.help-panel.visible { display: block; }
+
+/* ════════════════════════════════════════════════════════════
+   MODAL (Project list)
+   ════════════════════════════════════════════════════════════ */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+.modal-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    min-width: 340px;
+    max-width: 520px;
+    width: 100%;
+    box-shadow: var(--shadow-lg);
+}
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.modal-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 4px;
+}
+.modal-close:hover { color: var(--text-primary); }
+.modal-body { padding: 12px 16px 16px; }
+.project-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-subtle);
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: background var(--transition);
+}
+.project-list-item:hover { background: var(--bg-card-hover); }
+.project-list-name { flex: 1; font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.project-list-meta { font-size: 11px; color: var(--text-muted); }
+.project-list-del {
+    background: none; border: none; color: var(--text-muted);
+    cursor: pointer; font-size: 16px; padding: 0 4px; line-height: 1;
+}
+.project-list-del:hover { color: var(--danger); }
+
 /* ── Viz empty state ── */
 .empty-state-card {
     display: flex;

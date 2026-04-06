@@ -510,6 +510,8 @@ def calc_torque_drag():
         fluid_density = float(data['fluid_density'])
         mu_default    = float(data.get('mu_default', 0.25))
         mu_intervals  = data.get('mu_intervals', [])
+        op_mode       = data.get('op_mode', 'rih_slide')  # rih_slide | pooh_slide | rotate_off | rotate_on
+        wob           = float(data.get('wob', 0.0))
 
         validate_survey(survey)
         validate_assembly(assembly)
@@ -520,23 +522,40 @@ def calc_torque_drag():
                 f"Суммарная длина компоновки ({total_len:.1f} м) "
                 f"превышает целевую глубину ({target_depth:.1f} м)")
 
+        bf = 1.0 - fluid_density / STEEL_DENSITY
+
+        # ── Rotating mode: axial drag ≈ 0, only torque ──
+        is_rotating = op_mode in ('rotate_off', 'rotate_on')
+        mu_for_axial = 0.0 if is_rotating else mu_default
+        mu_ivs_for_axial = [] if is_rotating else mu_intervals
+
+        # For rotating_on: WOB acts as initial (negative) force at bit
+        initial_force_down = -abs(wob) if (op_mode == 'rotate_on' and wob > 0) else 0.0
+
         # ── Осевые нагрузки ──────────────────────────────
         forces_rih, segs_rih = johancsik_run(
             assembly, survey, target_depth, fluid_density,
-            mu_default, mu_intervals, direction='down')
+            mu_for_axial, mu_ivs_for_axial, direction='down',
+            initial_force=initial_force_down)
 
         forces_pooh, segs_pooh = johancsik_run(
             assembly, survey, target_depth, fluid_density,
-            mu_default, mu_intervals, direction='up')
+            mu_for_axial, mu_ivs_for_axial, direction='up')
 
         # ── Крутящий момент ───────────────────────────────
-        torque_profile = calc_torque_profile(segs_rih)
+        # For rotating modes, re-run with actual μ to get realistic normal forces for torque
+        if is_rotating:
+            _, segs_for_torque = johancsik_run(
+                assembly, survey, target_depth, fluid_density,
+                mu_default, mu_intervals, direction='down')
+        else:
+            segs_for_torque = segs_rih
+        torque_profile = calc_torque_profile(segs_for_torque)
 
         # ── Продольный изгиб ──────────────────────────────
-        buckling = calc_buckling(segs_rih)
+        buckling = calc_buckling(segs_for_torque)
 
         # ── Агрегированные показатели ─────────────────────
-        bf = 1.0 - fluid_density / STEEL_DENSITY
         W_air_kN  = sum(e['weight_air'] for e in assembly) * G / 1000.0
         W_buoy_kN = W_air_kN * bf
 
@@ -576,6 +595,7 @@ def calc_torque_drag():
 
         return jsonify(
             success=True,
+            op_mode=op_mode,
             forces_rih=forces_rih,
             forces_pooh=forces_pooh,
             torque=torque_profile,
@@ -803,6 +823,98 @@ def calc_hookload():
         return jsonify(success=False, error=str(e))
     except Exception as e:
         return jsonify(success=False, error=f"Ошибка расчёта: {e}")
+
+
+@app.route('/api/calculate/sensitivity', methods=['POST'])
+def calc_sensitivity():
+    """
+    Анализ чувствительности (Tornado-chart).
+    Варьирует μ, плотность раствора, суммарный вес BHA, целевую глубину на ±delta_pct%.
+    Возвращает % изменение POOH hookload на поверхности относительно базового случая.
+    """
+    try:
+        data = request.get_json()
+        survey        = data['survey']
+        assembly      = data['assembly']
+        target_depth  = float(data['target_depth'])
+        fluid_density = float(data['fluid_density'])
+        mu_base       = float(data.get('mu_base', 0.25))
+        delta_pct     = float(data.get('delta_pct', 20.0)) / 100.0
+
+        validate_survey(survey)
+        validate_assembly(assembly)
+
+        def pooh_surface(asm, td, fd, mu):
+            frc, _ = johancsik_run(asm, survey, td, fd, mu, [], direction='up')
+            return frc[-1]['force'] if frc else 0.0
+
+        def scale_assembly_weight(asm, factor):
+            return [{**e, 'weight_air': e['weight_air'] * factor} for e in assembly]
+
+        base = pooh_surface(assembly, target_depth, fluid_density, mu_base)
+
+        params = []
+
+        # ── μ ±delta_pct ──
+        lo_mu = max(0.05, mu_base * (1 - delta_pct))
+        hi_mu = min(0.80, mu_base * (1 + delta_pct))
+        lo_f  = pooh_surface(assembly, target_depth, fluid_density, lo_mu)
+        hi_f  = pooh_surface(assembly, target_depth, fluid_density, hi_mu)
+        params.append({
+            'name': f'Коэф. трения μ (±{int(delta_pct*100)}%)',
+            'lo': round(lo_f, 2), 'hi': round(hi_f, 2),
+            'lo_pct': round((lo_f - base) / abs(base) * 100, 1) if base else 0,
+            'hi_pct': round((hi_f - base) / abs(base) * 100, 1) if base else 0,
+        })
+
+        # ── Плотность раствора ±delta_pct ──
+        lo_fd = max(0.8, fluid_density * (1 - delta_pct))
+        hi_fd = min(2.5, fluid_density * (1 + delta_pct))
+        lo_f  = pooh_surface(assembly, target_depth, lo_fd, mu_base)
+        hi_f  = pooh_surface(assembly, target_depth, hi_fd, mu_base)
+        params.append({
+            'name': f'Плотность раствора (±{int(delta_pct*100)}%)',
+            'lo': round(lo_f, 2), 'hi': round(hi_f, 2),
+            'lo_pct': round((lo_f - base) / abs(base) * 100, 1) if base else 0,
+            'hi_pct': round((hi_f - base) / abs(base) * 100, 1) if base else 0,
+        })
+
+        # ── Вес BHA ±delta_pct ──
+        lo_asm = scale_assembly_weight(assembly, 1 - delta_pct)
+        hi_asm = scale_assembly_weight(assembly, 1 + delta_pct)
+        lo_f   = pooh_surface(lo_asm, target_depth, fluid_density, mu_base)
+        hi_f   = pooh_surface(hi_asm, target_depth, fluid_density, mu_base)
+        params.append({
+            'name': f'Вес BHA (±{int(delta_pct*100)}%)',
+            'lo': round(lo_f, 2), 'hi': round(hi_f, 2),
+            'lo_pct': round((lo_f - base) / abs(base) * 100, 1) if base else 0,
+            'hi_pct': round((hi_f - base) / abs(base) * 100, 1) if base else 0,
+        })
+
+        # ── Целевая глубина ±delta_pct ──
+        lo_td = max(100, target_depth * (1 - delta_pct))
+        hi_td = target_depth * (1 + delta_pct)
+        try:
+            lo_f = pooh_surface(assembly, lo_td, fluid_density, mu_base)
+        except Exception:
+            lo_f = base
+        try:
+            hi_f = pooh_surface(assembly, hi_td, fluid_density, mu_base)
+        except Exception:
+            hi_f = base
+        params.append({
+            'name': f'Целевая глубина (±{int(delta_pct*100)}%)',
+            'lo': round(lo_f, 2), 'hi': round(hi_f, 2),
+            'lo_pct': round((lo_f - base) / abs(base) * 100, 1) if base else 0,
+            'hi_pct': round((hi_f - base) / abs(base) * 100, 1) if base else 0,
+        })
+
+        return jsonify(success=True, base_pooh=round(base, 2), params=params)
+
+    except (ValueError, KeyError) as e:
+        return jsonify(success=False, error=str(e))
+    except Exception as e:
+        return jsonify(success=False, error=f'Ошибка анализа: {e}')
 
 
 @app.route('/api/calculate/packer', methods=['POST'])

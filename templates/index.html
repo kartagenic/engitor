@@ -65,6 +65,26 @@
             <span id="units-toggle-label">Field Units</span>
             <span class="theme-toggle-track"><span id="units-toggle-thumb" class="theme-toggle-thumb"></span></span>
         </button>
+
+        <!-- ── Project management ── -->
+        <div class="project-panel">
+            <div class="project-name-row">
+                <input type="text" id="project-name" class="project-name-input" placeholder="Без названия" maxlength="40">
+                <span id="project-saved-label" class="project-saved-label"></span>
+            </div>
+            <div class="project-btn-row">
+                <button class="btn btn-secondary btn-sm" onclick="saveProject()" title="Сохранить проект">Сохранить</button>
+                <button class="btn btn-ghost btn-sm" onclick="newProject()" title="Новый проект">Новый</button>
+            </div>
+            <div class="project-btn-row" style="margin-top:4px">
+                <button class="btn btn-ghost btn-sm" onclick="exportProject()" title="Экспорт .wm файла">↓ .wm</button>
+                <label class="btn btn-ghost btn-sm" title="Импорт .wm файла" style="cursor:pointer;text-align:center">
+                    ↑ .wm<input type="file" accept=".wm,.json" onchange="importProject(event)" style="display:none">
+                </label>
+                <button class="btn btn-ghost btn-sm" onclick="showProjectList()" title="Список проектов">Проекты</button>
+            </div>
+        </div>
+
         <div class="sidebar-footer">
             WellMech v1.0<br>Модель Johancsik, 1984
         </div>
@@ -139,6 +159,64 @@
                                 <input type="number" class="form-input" id="fluid-density"
                                        value="1.20" step="0.01" min="0.8" max="2.5" data-unit-type="dens">
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Буровая установка -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Буровая установка</span>
+                        <button class="help-btn" onclick="toggleHelp('help-rig')" title="Описание полей">ℹ</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-row cols-3">
+                            <div class="form-group">
+                                <label class="form-label" title="Максимальная грузоподъёмность крюка">Грузоподъёмность крюка (<span class="unit-lbl" data-unit="force">кН</span>)</label>
+                                <input type="number" class="form-input" id="rig-hook-capacity"
+                                       placeholder="1000" step="10" min="0" data-unit-type="force">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" title="Максимальный крутящий момент ротора">Макс. момент (кН·м)</label>
+                                <input type="number" class="form-input" id="rig-max-torque"
+                                       placeholder="30" step="1" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" title="Максимальная скорость вращения">Макс. об/мин</label>
+                                <input type="number" class="form-input" id="rig-max-rpm"
+                                       placeholder="200" step="10" min="0">
+                            </div>
+                        </div>
+                        <div class="help-panel" id="help-rig">
+                            <strong>Буровая установка:</strong> Данные используются как предельные линии на графиках.
+                            Грузоподъёмность — горизонтальная красная линия на диаграмме веса на крюке.
+                            Момент — предельная линия на графике крутящего момента T&amp;D.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Пласты и башмаки обсадных колонн -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Пласты и башмаки</span>
+                        <button class="btn btn-secondary btn-sm" onclick="addFormationRow()">+ Добавить</button>
+                    </div>
+                    <div class="card-body no-pad">
+                        <div class="table-wrap">
+                            <table class="data-table" id="formation-table">
+                                <thead>
+                                    <tr>
+                                        <th>Глубина MD (<span class="unit-lbl" data-unit="depth">м</span>)</th>
+                                        <th>Название</th>
+                                        <th>Тип</th>
+                                        <th style="width:36px"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="formation-tbody"></tbody>
+                            </table>
+                        </div>
+                        <div style="padding:8px 12px;font-size:12px;color:var(--text-muted)">
+                            Пласты и башмаки отображаются на всех графиках глубины как горизонтальные линии.
                         </div>
                     </div>
                 </div>
@@ -514,16 +592,39 @@
                             <div style="display:flex;align-items:center">
                                 <span class="accordion-number">4</span>
                                 <span class="accordion-title">Torque &amp; Drag — полный анализ</span>
+                                <button class="help-btn" onclick="event.stopPropagation();toggleHelp('help-td')" title="Формулы T&D">ℹ</button>
                             </div>
                             <span class="accordion-chevron">&#9662;</span>
                         </div>
                         <div class="accordion-body">
+                            <!-- Режим операции -->
+                            <div style="margin-bottom:12px">
+                                <div class="form-label" style="margin-bottom:6px">Режим операции</div>
+                                <div class="mode-toggle" id="td-op-mode">
+                                    <button class="toggle-btn active" data-mode="rih_slide" onclick="setTdMode('rih_slide')">Спуск (RIH)</button>
+                                    <button class="toggle-btn" data-mode="pooh_slide" onclick="setTdMode('pooh_slide')">Подъём (POOH)</button>
+                                    <button class="toggle-btn" data-mode="rotate_off" onclick="setTdMode('rotate_off')">Вращение ОЗ</button>
+                                    <button class="toggle-btn" data-mode="rotate_on" onclick="setTdMode('rotate_on')">Вращение НЗ</button>
+                                </div>
+                            </div>
                             <div class="form-row cols-3">
                                 <div class="form-group">
                                     <label class="form-label">Целевая глубина (<span class="unit-lbl" data-unit="depth">м</span>)</label>
                                     <input type="number" class="form-input" id="td-target-depth"
                                            placeholder="3000" step="1" min="0" data-unit-type="depth">
                                 </div>
+                                <div class="form-group" id="td-wob-group" style="display:none">
+                                    <label class="form-label">Нагрузка на долото WOB (<span class="unit-lbl" data-unit="force">кН</span>)</label>
+                                    <input type="number" class="form-input" id="td-wob" placeholder="20" step="1" min="0">
+                                </div>
+                            </div>
+                            <div class="help-panel" id="help-td">
+                                <strong>Модель Johancsik (1984):</strong><br>
+                                F<sub>top</sub> = F<sub>bot</sub> + W<sub>ax</sub> ± μ·N, где N = √(W<sub>n</sub>² + (F·DL)²)<br>
+                                W<sub>ax</sub> = W<sub>b</sub>·cos(θ), W<sub>n</sub> = W<sub>b</sub>·sin(θ)<br>
+                                <span style="opacity:.7">«−» при спуске (RIH), «+» при подъёме (POOH)</span><br>
+                                <strong>Вращение:</strong> осевая сила = W<sub>buoyed</sub> (без трения),
+                                момент ΔT = μ·N·r (накапливается снизу вверх).
                             </div>
                             <div class="btn-group" style="margin-top:8px">
                                 <button class="btn btn-primary" id="btn-calc-td" onclick="calcTorqueDrag()">
@@ -582,6 +683,54 @@
                                 <div style="margin-top:16px" id="td-buckling-section">
                                     <div class="section-label" style="margin-bottom:8px">Анализ продольного изгиба</div>
                                     <div id="td-buckling-content"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- РАСЧЁТ 5 — АНАЛИЗ ЧУВСТВИТЕЛЬНОСТИ -->
+                    <div class="accordion-item">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div style="display:flex;align-items:center">
+                                <span class="accordion-number">5</span>
+                                <span class="accordion-title">Анализ чувствительности (Tornado)</span>
+                                <button class="help-btn" onclick="event.stopPropagation();toggleHelp('help-sens')" title="Об анализе чувствительности">ℹ</button>
+                            </div>
+                            <span class="accordion-chevron">&#9662;</span>
+                        </div>
+                        <div class="accordion-body">
+                            <div class="form-row cols-3">
+                                <div class="form-group">
+                                    <label class="form-label">Целевая глубина (<span class="unit-lbl" data-unit="depth">м</span>)</label>
+                                    <input type="number" class="form-input" id="sens-target-depth"
+                                           placeholder="3000" step="1" min="0" data-unit-type="depth">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Отклонение параметра (%)</label>
+                                    <input type="number" class="form-input" id="sens-delta-pct"
+                                           value="20" step="5" min="5" max="50">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Базовый μ (обсадная)</label>
+                                    <input type="number" class="form-input" id="sens-mu-base"
+                                           value="0.25" step="0.01" min="0.05" max="0.8">
+                                </div>
+                            </div>
+                            <div class="help-panel" id="help-sens">
+                                <strong>Tornado-анализ</strong> показывает, какие параметры наиболее влияют на POOH hookload.
+                                Каждый параметр варьируется на ±Δ%, остальные фиксированы.
+                                Параметры: μ, плотность раствора, суммарный вес BHA, целевая глубина.
+                            </div>
+                            <div class="btn-group" style="margin-top:8px">
+                                <button class="btn btn-primary" id="btn-calc-sens" onclick="calcSensitivity()">
+                                    Построить Tornado
+                                </button>
+                                <span id="sens-spinner" class="spinner" style="display:none"></span>
+                            </div>
+                            <div id="sens-results" style="display:none;margin-top:20px">
+                                <div class="chart-container" id="sens-chart" style="min-height:280px"></div>
+                                <div style="margin-top:10px;font-size:12px;color:var(--text-muted)">
+                                    Базовое значение POOH (μ=base): <strong id="sens-base-val">—</strong>
                                 </div>
                             </div>
                         </div>
@@ -874,6 +1023,19 @@
 </div>
 
 <div id="toast-container" aria-live="polite"></div>
+
+<!-- Project List Modal -->
+<div id="project-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeProjectModal()">
+    <div class="modal-box">
+        <div class="modal-header">
+            <span class="modal-title">Сохранённые проекты</span>
+            <button class="modal-close" onclick="closeProjectModal()">×</button>
+        </div>
+        <div class="modal-body" id="project-list-container">
+            <div style="color:var(--text-muted);font-size:13px">Нет сохранённых проектов</div>
+        </div>
+    </div>
+</div>
 
 <script src="/static/js/app.js"></script>
 </body>

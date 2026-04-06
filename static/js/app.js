@@ -137,7 +137,282 @@ const state = {
     trajectory: null,
     calibratedMu: null,
     results: { reachability: null, hookload: null, packer: null, torqueDrag: null },
+    rig: { hookCapacity: null, maxTorque: null, maxRpm: null },
 };
+
+
+// ════════════════════════════════════════════════════════════
+// ПРОЕКТ — СОХРАНЕНИЕ / ЗАГРУЗКА
+// ════════════════════════════════════════════════════════════
+
+const WM_PROJECTS_KEY = 'wm-projects';
+let _autoSaveTimer = null;
+
+function getProjectData() {
+    // Collect all current app data into a serialisable object
+    const survey = [];
+    document.getElementById('survey-tbody').querySelectorAll('tr').forEach(tr => {
+        const ins = tr.querySelectorAll('input');
+        survey.push({ depth: ins[0]?.value, incl: ins[1]?.value, azim: ins[2]?.value });
+    });
+
+    const assembly = [];
+    document.getElementById('assembly-tbody').querySelectorAll('tr').forEach(tr => {
+        const nums = tr.querySelectorAll('input[type="number"]');
+        const name = tr.querySelector('input[type="text"]')?.value ?? '';
+        const grade = tr.querySelector('select.grade-sel')?.value ?? '';
+        const conn  = tr.querySelector('select.conn-sel')?.value ?? '';
+        assembly.push({
+            name,
+            len: nums[0]?.value, weight: nums[1]?.value,
+            od: nums[2]?.value, linwt: nums[3]?.value, maxLoad: nums[4]?.value,
+            grade, conn,
+        });
+    });
+
+    const muIntervals = [];
+    document.getElementById('mu-tbody').querySelectorAll('tr').forEach(tr => {
+        const ins = tr.querySelectorAll('input');
+        muIntervals.push({ from: ins[0]?.value, to: ins[1]?.value, mu: ins[2]?.value });
+    });
+
+    const formations = [];
+    document.getElementById('formation-tbody').querySelectorAll('tr').forEach(tr => {
+        const ins = tr.querySelectorAll('input');
+        const sel = tr.querySelector('select');
+        formations.push({ depth: ins[0]?.value, name: ins[1]?.value, type: sel?.value ?? 'formation' });
+    });
+
+    return {
+        version: 1,
+        unitSystem,
+        fluidDensity: document.getElementById('fluid-density').value,
+        muOpenhole: document.getElementById('mu-openhole').value,
+        muCased:    document.getElementById('mu-cased').value,
+        muLiner:    document.getElementById('mu-liner').value,
+        shoeCasing: document.getElementById('shoe-casing').value,
+        shoeLiner:  document.getElementById('shoe-liner').value,
+        rigHookCapacity: document.getElementById('rig-hook-capacity')?.value ?? '',
+        rigMaxTorque:    document.getElementById('rig-max-torque')?.value ?? '',
+        rigMaxRpm:       document.getElementById('rig-max-rpm')?.value ?? '',
+        survey,
+        assembly,
+        muIntervals,
+        formations,
+        calcInputs: {
+            reachDepth:    document.getElementById('reach-target-depth')?.value ?? '',
+            hookDepth:     document.getElementById('hook-target-depth')?.value ?? '',
+            hookMuMin:     document.getElementById('hook-mu-min')?.value ?? '',
+            hookMuMax:     document.getElementById('hook-mu-max')?.value ?? '',
+            hookPackerF:   document.getElementById('hook-packer-force')?.value ?? '',
+            packerSetF:    document.getElementById('packer-set-force')?.value ?? '',
+            packerDepth:   document.getElementById('packer-target-depth')?.value ?? '',
+            tdDepth:       document.getElementById('td-target-depth')?.value ?? '',
+            sensDepth:     document.getElementById('sens-target-depth')?.value ?? '',
+        },
+    };
+}
+
+function applyProjectData(data) {
+    if (!data || data.version !== 1) { showError('Неверный формат файла проекта'); return; }
+
+    // Unit system
+    if (data.unitSystem && data.unitSystem !== unitSystem) {
+        unitSystem = data.unitSystem;
+        localStorage.setItem('wm-units', unitSystem);
+        applyUnitLabels();
+    }
+
+    // Well params
+    if (data.fluidDensity) document.getElementById('fluid-density').value = data.fluidDensity;
+    if (data.muOpenhole)   document.getElementById('mu-openhole').value = data.muOpenhole;
+    if (data.muCased)      document.getElementById('mu-cased').value    = data.muCased;
+    if (data.muLiner)      document.getElementById('mu-liner').value    = data.muLiner;
+    if (data.shoeCasing)   document.getElementById('shoe-casing').value = data.shoeCasing;
+    if (data.shoeLiner)    document.getElementById('shoe-liner').value  = data.shoeLiner;
+
+    // Rig
+    if (document.getElementById('rig-hook-capacity')) {
+        document.getElementById('rig-hook-capacity').value = data.rigHookCapacity ?? '';
+        document.getElementById('rig-max-torque').value    = data.rigMaxTorque    ?? '';
+        document.getElementById('rig-max-rpm').value       = data.rigMaxRpm       ?? '';
+    }
+
+    // Survey
+    document.getElementById('survey-tbody').innerHTML = '';
+    (data.survey || []).forEach(s => makeSurveyRow(s.depth, s.incl, s.azim));
+    if (document.getElementById('survey-tbody').rows.length === 0) {
+        for (let i = 0; i < 3; i++) addSurveyRow();
+    }
+
+    // Assembly
+    document.getElementById('assembly-tbody').innerHTML = '';
+    (data.assembly || []).forEach(a => {
+        makeAssemblyRow(a.name, a.len, a.weight, a.od, a.maxLoad, a.linwt, a.grade, a.conn);
+    });
+    updateAssemblySummary();
+
+    // Mu intervals
+    document.getElementById('mu-tbody').innerHTML = '';
+    (data.muIntervals || []).forEach(m => addMuRow(m.from, m.to, m.mu));
+
+    // Formation tops
+    document.getElementById('formation-tbody').innerHTML = '';
+    (data.formations || []).forEach(f => addFormationRow(f.depth, f.name, f.type));
+
+    // Calc inputs
+    const ci = data.calcInputs || {};
+    const setV = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+    setV('reach-target-depth', ci.reachDepth);
+    setV('hook-target-depth',  ci.hookDepth);
+    setV('hook-mu-min',        ci.hookMuMin);
+    setV('hook-mu-max',        ci.hookMuMax);
+    setV('hook-packer-force',  ci.hookPackerF);
+    setV('packer-set-force',   ci.packerSetF);
+    setV('packer-target-depth',ci.packerDepth);
+    setV('td-target-depth',    ci.tdDepth);
+    setV('sens-target-depth',  ci.sensDepth);
+}
+
+function saveProject(silent = false) {
+    const name = (document.getElementById('project-name')?.value || '').trim() || 'Без названия';
+    const projects = JSON.parse(localStorage.getItem(WM_PROJECTS_KEY) || '{}');
+    const key = 'proj_' + Date.now();
+    // If a project with same name exists, overwrite it
+    let existKey = Object.keys(projects).find(k => projects[k].name === name);
+    if (existKey) {
+        projects[existKey] = { name, ts: Date.now(), data: getProjectData() };
+    } else {
+        projects[key] = { name, ts: Date.now(), data: getProjectData() };
+    }
+    localStorage.setItem(WM_PROJECTS_KEY, JSON.stringify(projects));
+    localStorage.setItem('wm-last-project', name);
+    updateSavedLabel();
+    if (!silent) showSuccess(`Проект «${name}» сохранён`);
+}
+
+function updateSavedLabel() {
+    const lbl = document.getElementById('project-saved-label');
+    if (!lbl) return;
+    const now = new Date();
+    lbl.textContent = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+}
+
+function newProject() {
+    if (!confirm('Создать новый проект? Несохранённые данные будут потеряны.')) return;
+    document.getElementById('project-name').value = '';
+    document.getElementById('survey-tbody').innerHTML = '';
+    for (let i = 0; i < 3; i++) addSurveyRow();
+    document.getElementById('assembly-tbody').innerHTML = '';
+    document.getElementById('mu-tbody').innerHTML = '';
+    document.getElementById('formation-tbody').innerHTML = '';
+    updateAssemblySummary();
+    document.getElementById('project-saved-label').textContent = '';
+    showInfo('Новый проект создан');
+}
+
+function exportProject() {
+    const name = (document.getElementById('project-name')?.value || '').trim() || 'wellmech-project';
+    const data = getProjectData();
+    data.projectName = name;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name.replace(/[^a-zA-Zа-яА-Я0-9_-]/g, '_') + '.wm';
+    a.click();
+    URL.revokeObjectURL(url);
+    showSuccess('Файл проекта экспортирован');
+}
+
+function importProject(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+        try {
+            const data = JSON.parse(e.target.result);
+            applyProjectData(data);
+            if (data.projectName) {
+                const nameEl = document.getElementById('project-name');
+                if (nameEl) nameEl.value = data.projectName;
+            }
+            showSuccess('Проект импортирован: ' + (data.projectName || 'без названия'));
+        } catch (err) {
+            showError('Ошибка чтения файла: ' + err.message);
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';  // reset input
+}
+
+function showProjectList() {
+    const modal = document.getElementById('project-modal');
+    if (!modal) return;
+    const container = document.getElementById('project-list-container');
+    const projects = JSON.parse(localStorage.getItem(WM_PROJECTS_KEY) || '{}');
+    const entries = Object.entries(projects).sort((a, b) => b[1].ts - a[1].ts);
+    if (entries.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted);font-size:13px">Нет сохранённых проектов</div>';
+    } else {
+        container.innerHTML = entries.map(([key, proj]) => {
+            const dt = new Date(proj.ts);
+            const dtStr = dt.toLocaleDateString('ru-RU') + ' ' + dt.toLocaleTimeString('ru-RU', { hour:'2-digit', minute:'2-digit' });
+            return `<div class="project-list-item" onclick="loadProjectByKey('${key}')">
+                <div style="flex:1">
+                    <div class="project-list-name">${proj.name}</div>
+                    <div class="project-list-meta">${dtStr}</div>
+                </div>
+                <button class="project-list-del" onclick="event.stopPropagation();deleteProject('${key}')" title="Удалить">×</button>
+            </div>`;
+        }).join('');
+    }
+    modal.style.display = 'flex';
+}
+
+function closeProjectModal() {
+    const modal = document.getElementById('project-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+function loadProjectByKey(key) {
+    const projects = JSON.parse(localStorage.getItem(WM_PROJECTS_KEY) || '{}');
+    const proj = projects[key];
+    if (!proj) { showError('Проект не найден'); return; }
+    applyProjectData(proj.data);
+    const nameEl = document.getElementById('project-name');
+    if (nameEl) nameEl.value = proj.name;
+    closeProjectModal();
+    showSuccess(`Проект «${proj.name}» загружен`);
+}
+
+function deleteProject(key) {
+    const projects = JSON.parse(localStorage.getItem(WM_PROJECTS_KEY) || '{}');
+    const name = projects[key]?.name || key;
+    if (!confirm(`Удалить проект «${name}»?`)) return;
+    delete projects[key];
+    localStorage.setItem(WM_PROJECTS_KEY, JSON.stringify(projects));
+    showProjectList();
+}
+
+// Auto-save every 30 seconds
+function startAutoSave() {
+    if (_autoSaveTimer) clearInterval(_autoSaveTimer);
+    _autoSaveTimer = setInterval(() => saveProject(true), 30000);
+}
+
+// Restore last auto-saved session
+function restoreLastSession() {
+    const projects = JSON.parse(localStorage.getItem(WM_PROJECTS_KEY) || '{}');
+    const lastName = localStorage.getItem('wm-last-project');
+    if (!lastName) return;
+    const entry = Object.values(projects).find(p => p.name === lastName);
+    if (entry) {
+        applyProjectData(entry.data);
+        const nameEl = document.getElementById('project-name');
+        if (nameEl) nameEl.value = entry.name;
+    }
+}
 
 // ════════════════════════════════════════════════════════════
 // ТЕМА — СВЕТЛАЯ / ТЁМНАЯ
@@ -458,6 +733,121 @@ function updateMuZones() {
     showInfo('Зоны μ обновлены');
 }
 
+
+// ════════════════════════════════════════════════════════════
+// ПЛАСТЫ И БАШМАКИ
+// ════════════════════════════════════════════════════════════
+
+function addFormationRow(depth, name, type) {
+    const tbody = document.getElementById('formation-tbody');
+    if (!tbody) return;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+        <td><input type="number" step="any" value="${depth ?? ''}" placeholder="0"></td>
+        <td><input type="text" value="${name ?? ''}" placeholder="Башмак ОК / Название пласта" style="width:100%"></td>
+        <td>
+            <select class="form-input" style="padding:3px 4px;font-size:11px">
+                <option value="casing_shoe" ${type==='casing_shoe'?'selected':''}>Башмак ОК</option>
+                <option value="formation" ${(!type||type==='formation')?'selected':''}>Пласт</option>
+                <option value="marker" ${type==='marker'?'selected':''}>Маркер</option>
+            </select>
+        </td>
+        <td><button class="btn-row-delete" onclick="this.closest('tr').remove()">&times;</button></td>
+    `;
+    tbody.appendChild(tr);
+}
+
+function getFormationTops() {
+    const rows = document.getElementById('formation-tbody')?.rows || [];
+    const tops = [];
+    for (const row of rows) {
+        const ins = row.querySelectorAll('input');
+        const sel = row.querySelector('select');
+        const depth = parseFloat(ins[0]?.value);
+        const name  = ins[1]?.value || '';
+        const type  = sel?.value || 'formation';
+        if (!isNaN(depth) && depth > 0) {
+            tops.push({ depth: toSI(depth, 'depth'), name, type });
+        }
+    }
+    return tops;
+}
+
+/**
+ * Build Plotly shapes + annotations for formation tops on a depth chart.
+ * depthUnit: 'm' or 'ft' (for display); returns {shapes, annotations} for layout.
+ */
+function formationAnnotations(tops) {
+    const shapes = [];
+    const annotations = [];
+    const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+
+    tops.forEach(top => {
+        const dispDepth = fromSI(top.depth, 'depth');
+        const isCasing = top.type === 'casing_shoe';
+        const isMarker = top.type === 'marker';
+        const color = isCasing ? '#00c853' : isMarker ? '#ffab00' : '#6b7280';
+        const dash  = isCasing ? 'dashdot' : 'dot';
+
+        shapes.push({
+            type: 'line',
+            x0: 0, x1: 1,
+            xref: 'paper',
+            y0: dispDepth, y1: dispDepth,
+            yref: 'y',
+            line: { color, width: 1.5, dash },
+        });
+        annotations.push({
+            x: 1,
+            xref: 'paper',
+            y: dispDepth,
+            yref: 'y',
+            text: top.name || (isCasing ? 'Башмак' : 'Пласт'),
+            showarrow: false,
+            xanchor: 'right',
+            yanchor: 'bottom',
+            font: { size: 10, color },
+            bgcolor: 'rgba(0,0,0,0)',
+        });
+    });
+    return { shapes, annotations };
+}
+
+/**
+ * Add formation top lines and rig capacity line to an already-rendered Plotly chart.
+ */
+function addDepthAnnotations(divId, tops, rigCapacityKN) {
+    const el = document.getElementById(divId);
+    if (!el || !el._fullLayout) return;
+
+    const { shapes, annotations } = formationAnnotations(tops);
+
+    // Rig hook capacity — horizontal line on force axis
+    if (rigCapacityKN && rigCapacityKN > 0) {
+        const capDisp = fromSI(rigCapacityKN, 'force');
+        const maxDepth = fromSI(Math.max(...tops.map(t => t.depth), 4000), 'depth');
+        shapes.push({
+            type: 'line',
+            x0: capDisp, x1: capDisp,
+            y0: 0, y1: 1,
+            xref: 'x', yref: 'paper',
+            line: { color: '#ff1744', width: 2, dash: 'dash' },
+        });
+        annotations.push({
+            x: capDisp, y: 0.02,
+            xref: 'x', yref: 'paper',
+            text: `Грузоп. ${capDisp.toFixed(0)} ${UNITS[unitSystem].force}`,
+            showarrow: false,
+            xanchor: 'left',
+            font: { size: 10, color: '#ff1744' },
+            bgcolor: 'rgba(0,0,0,0)',
+        });
+    }
+
+    try {
+        Plotly.relayout(divId, { shapes, annotations });
+    } catch (e) { /* chart might not be ready */ }
+}
 
 // ════════════════════════════════════════════════════════════
 // КОМПОНОВКА
@@ -915,6 +1305,7 @@ async function calcReachability() {
             xaxis: { title: 'Осевая нагрузка (кН)' },
             yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
         });
+        setTimeout(() => addDepthAnnotations('reach-chart', getFormationTops(), null), 50);
 
         // Таблица
         const tbody = document.getElementById('reach-force-tbody');
@@ -1196,12 +1587,103 @@ function renderHookloadBandChart(res, muMin, muMax, pkForce) {
         legend: { orientation: 'h', y: -0.18 },
         margin: { l: 70, r: 20, t: 36, b: 90 },
     });
+
+    // Overlay formation tops + rig capacity
+    const rigCap = parseFloat(document.getElementById('rig-hook-capacity')?.value);
+    const rigCapSI = rigCap > 0 ? toSI(rigCap, 'force') : null;
+    setTimeout(() => addDepthAnnotations('hook-chart', getFormationTops(), rigCapSI), 50);
 }
 
 
 // ════════════════════════════════════════════════════════════
-// РАСЧЁТ 4 — TORQUE & DRAG
+// РАСЧЁТ 5 — АНАЛИЗ ЧУВСТВИТЕЛЬНОСТИ (TORNADO)
 // ════════════════════════════════════════════════════════════
+
+async function calcSensitivity() {
+    const td = parseFloat(document.getElementById('sens-target-depth').value);
+    if (!td || td <= 0) { showError('Укажите целевую глубину'); return; }
+
+    const data = collectRequestData(td);
+    if (data.survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
+    if (!data.assembly.length)  { showError('Заполните компоновку'); return; }
+
+    const deltaPct = parseFloat(document.getElementById('sens-delta-pct').value) || 20;
+    const muBase   = parseFloat(document.getElementById('sens-mu-base').value) || 0.25;
+    data.delta_pct = deltaPct;
+    data.mu_base   = muBase;
+
+    document.getElementById('sens-spinner').style.display = '';
+    document.getElementById('btn-calc-sens').disabled = true;
+    document.getElementById('sens-results').style.display = 'none';
+
+    try {
+        const res = await apiPost('/api/calculate/sensitivity', data);
+        if (!res.success) { showError(res.error || 'Ошибка расчёта'); return; }
+
+        document.getElementById('sens-results').style.display = '';
+        const baseVal = fromSI(res.base_pooh, 'force').toFixed(1);
+        document.getElementById('sens-base-val').textContent = `${baseVal} ${UNITS[unitSystem].force}`;
+
+        // Build tornado chart: horizontal bars sorted by abs impact
+        const params = res.params;  // [{name, lo, hi, lo_pct, hi_pct}]
+        params.sort((a, b) => Math.abs(b.hi_pct - b.lo_pct) - Math.abs(a.hi_pct - a.lo_pct));
+
+        const names = params.map(p => p.name);
+        const loVals = params.map(p => p.lo_pct);   // negative = decrease
+        const hiVals = params.map(p => p.hi_pct);   // positive = increase
+
+        const trLo = {
+            x: loVals, y: names,
+            type: 'bar', orientation: 'h',
+            name: `−${deltaPct}%`,
+            marker: { color: 'rgba(255,23,68,0.7)' },
+            text: loVals.map(v => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`),
+            textposition: 'outside',
+        };
+        const trHi = {
+            x: hiVals, y: names,
+            type: 'bar', orientation: 'h',
+            name: `+${deltaPct}%`,
+            marker: { color: 'rgba(0,200,83,0.7)' },
+            text: hiVals.map(v => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`),
+            textposition: 'outside',
+        };
+
+        _plot('sens-chart', [trLo, trHi], {
+            barmode: 'overlay',
+            xaxis: { title: `Изменение POOH hookload (%)`, zeroline: true, zerolinewidth: 1.5 },
+            yaxis: { automargin: true },
+            height: Math.max(260, params.length * 38 + 80),
+            margin: { l: 180, r: 60, t: 36, b: 50 },
+            legend: { orientation: 'h', y: -0.2 },
+            shapes: [{ type: 'line', x0: 0, x1: 0, y0: 0, y1: 1,
+                        xref: 'x', yref: 'paper',
+                        line: { color: '#6b7280', width: 1.5, dash: 'dot' } }],
+        });
+
+    } catch (e) {
+        showError('Ошибка: ' + e.message);
+    } finally {
+        document.getElementById('sens-spinner').style.display = 'none';
+        document.getElementById('btn-calc-sens').disabled = false;
+    }
+}
+
+
+// ════════════════════════════════════════════════════════════
+// РАСЧЁТ 4 — TORQUE & DRAG (перенумеровано — было 4, осталось 4)
+// ════════════════════════════════════════════════════════════
+
+let _tdOpMode = 'rih_slide';
+
+function setTdMode(mode) {
+    _tdOpMode = mode;
+    document.querySelectorAll('#td-op-mode .toggle-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.mode === mode);
+    });
+    const wobGroup = document.getElementById('td-wob-group');
+    if (wobGroup) wobGroup.style.display = mode === 'rotate_on' ? '' : 'none';
+}
 
 async function calcTorqueDrag() {
     const td = parseFloat(document.getElementById('td-target-depth').value);
@@ -1210,6 +1692,11 @@ async function calcTorqueDrag() {
     const data = collectRequestData(td);
     if (data.survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
     if (!data.assembly.length)  { showError('Заполните компоновку'); return; }
+
+    // Pass operating mode and WOB
+    data.op_mode = _tdOpMode;
+    const wob = parseFloat(document.getElementById('td-wob')?.value);
+    if (!isNaN(wob) && wob > 0) data.wob = toSI(wob, 'force');
 
     document.getElementById('td-spinner').style.display = '';
     document.getElementById('btn-calc-td').disabled = true;
@@ -1295,6 +1782,11 @@ async function calcTorqueDrag() {
             yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
             height: 360,
         });
+        setTimeout(() => {
+            const rigCap = parseFloat(document.getElementById('rig-hook-capacity')?.value);
+            const rigCapSI = rigCap > 0 ? toSI(rigCap, 'force') : null;
+            addDepthAnnotations('td-drag-chart', getFormationTops(), rigCapSI);
+        }, 50);
 
         // ── Torque-график ──
         const depT = res.torque.map(t => t.depth);
@@ -1308,11 +1800,18 @@ async function calcTorqueDrag() {
             fillcolor: 'rgba(255,171,0,0.06)',
             name: 'Момент',
         };
+        const rigMaxTorque = parseFloat(document.getElementById('rig-max-torque')?.value);
         _plot('td-torque-chart', [traceTorq], {
             xaxis: { title: 'Крутящий момент (кН·м)' },
             yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
             height: 320,
+            shapes: rigMaxTorque > 0 ? [{
+                type: 'line', x0: rigMaxTorque, x1: rigMaxTorque,
+                y0: 0, y1: 1, xref: 'x', yref: 'paper',
+                line: { color: '#ff1744', width: 2, dash: 'dash' },
+            }] : [],
         });
+        setTimeout(() => addDepthAnnotations('td-torque-chart', getFormationTops(), null), 50);
 
         // ── Трение по элементам (горизонтальный bar) ──
         const segs  = res.segments || [];
@@ -2147,4 +2646,28 @@ function addApi5ctToAssembly() {
 // Initialize API 5CT table on load
 document.addEventListener('DOMContentLoaded', function initApi5ct() {
     filterApi5ct();
+});
+
+
+// ════════════════════════════════════════════════════════════
+// ВСТРОЕННАЯ ПОМОЩЬ (INLINE HELP PANELS)
+// ════════════════════════════════════════════════════════════
+
+function toggleHelp(id) {
+    const panel = document.getElementById(id);
+    if (!panel) return;
+    panel.classList.toggle('visible');
+}
+
+
+// ════════════════════════════════════════════════════════════
+// ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ
+// ════════════════════════════════════════════════════════════
+
+document.addEventListener('DOMContentLoaded', function initApp() {
+    // Restore last saved session
+    try { restoreLastSession(); } catch (e) { /* ignore */ }
+
+    // Start auto-save
+    startAutoSave();
 });
