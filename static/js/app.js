@@ -123,6 +123,20 @@ function convertInputValues() {
             }
         });
     }
+    // Convert formation-tbody depth column
+    const fmRows = document.getElementById('formation-tbody')?.rows || [];
+    for (const row of fmRows) {
+        const inp = row.querySelectorAll('input')[0];
+        if (!inp) continue;
+        const val = parseFloat(inp.value);
+        if (!isNaN(val) && val !== 0) {
+            if (unitSystem === 'field') {
+                inp.value = (val / FIELD_TO_SI['depth']).toFixed(2).replace(/\.?0+$/, '');
+            } else {
+                inp.value = (val * FIELD_TO_SI['depth']).toFixed(2).replace(/\.?0+$/, '');
+            }
+        }
+    }
 }
 
 // Init unit system on load
@@ -1193,6 +1207,7 @@ function collectRequestData(targetDepth) {
         fluid_density: toSI(parseFloat(document.getElementById('fluid-density').value) || 1.2, 'dens'),
         mu_default: parseFloat(document.getElementById('mu-openhole').value) || 0.25,
         mu_intervals: getMuIntervals(),
+        tortuosity: parseFloat(document.getElementById('mu-tortuosity')?.value) || 0,
     };
 }
 
@@ -1839,6 +1854,30 @@ async function calcTorqueDrag() {
             margin: { l: 160, r: 20, t: 36, b: 50 },
         });
 
+        // ── Side Force (N) depth profile ──
+        if (segs.length > 0) {
+            // Build depth-N pairs: use midpoint of each segment
+            const sfDepths = segs.map(s => (s.top + s.bottom) / 2);
+            const sfN      = segs.map(s => s.N);
+            const sfNames  = segs.map(s => s.name);
+            _plot('td-sideforce-chart', [{
+                x: sfN, y: sfDepths,
+                type: 'scatter', mode: 'lines+markers',
+                line: { color: '#00bcd4', width: 2.5 },
+                marker: { size: 5, color: sfN.map(n =>
+                    n > 30 ? '#ff1744' : n > 10 ? '#ffab00' : '#00c853') },
+                text: sfNames,
+                hovertemplate: '<b>%{text}</b><br>Глубина: %{y:.1f} м<br>N: %{x:.2f} кН<extra></extra>',
+                fill: 'tozerox', fillcolor: 'rgba(0,188,212,0.06)',
+                name: 'Side Force N',
+            }], {
+                xaxis: { title: 'Боковая нагрузка N (кН)', zeroline: true },
+                yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
+                height: 300,
+            });
+            setTimeout(() => addDepthAnnotations('td-sideforce-chart', getFormationTops(), null), 50);
+        }
+
         // ── Таблица по элементам ──
         const segTbody = document.getElementById('td-seg-tbody');
         segTbody.innerHTML = '';
@@ -1857,8 +1896,50 @@ async function calcTorqueDrag() {
             segTbody.appendChild(tr);
         });
 
-        // ── Продольный изгиб ──
+        // ── Продольный изгиб — Profile Chart ──
         const buck = res.buckling || [];
+        const buckChartDiv = document.getElementById('td-buckling-chart');
+        if (buckChartDiv) {
+            // Build profile from segments_rih: actual force vs critical buckling
+            // Use T&D segment data to reconstruct force + critical loads per segment
+            const bkDepths  = segs.map(s => s.top);
+            const bkF_rih   = segs.map(s => s.F_rih_top);
+            const bkF_pooh  = segs.map(s => s.F_pooh_top);
+
+            // Map buckling critical forces to segment depths (match by top depth)
+            const buckByTop = {};
+            buck.forEach(b => { buckByTop[b.top] = b; });
+
+            const crSin = segs.map(s => buckByTop[s.top]?.F_cr_sin ?? null);
+            const crHel = segs.map(s => buckByTop[s.top]?.F_cr_hel ?? null);
+
+            const trBuckRIH = {
+                x: bkF_rih, y: bkDepths, type: 'scatter', mode: 'lines',
+                line: { color: '#3d5afe', width: 2 }, name: 'Ос. нагрузка RIH',
+            };
+            const trBuckPOOH = {
+                x: bkF_pooh, y: bkDepths, type: 'scatter', mode: 'lines',
+                line: { color: '#00c853', width: 2 }, name: 'Ос. нагрузка POOH',
+            };
+            const trCrSin = {
+                x: crSin.map(v => v !== null ? -v : null), y: bkDepths,
+                type: 'scatter', mode: 'lines',
+                line: { color: '#ffab00', width: 1.5, dash: 'dash' },
+                name: 'Крит. синус. изгиб',
+            };
+            const trCrHel = {
+                x: crHel.map(v => v !== null ? -v : null), y: bkDepths,
+                type: 'scatter', mode: 'lines',
+                line: { color: '#ff1744', width: 1.5, dash: 'dot' },
+                name: 'Крит. спир. изгиб',
+            };
+            _plot('td-buckling-chart', [trBuckRIH, trBuckPOOH, trCrSin, trCrHel], {
+                xaxis: { title: 'Ос. нагрузка (кН, отриц. = сжатие)', zeroline: true, zerolinewidth: 1.5 },
+                yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
+                height: 300,
+            });
+        }
+
         const buckDiv = document.getElementById('td-buckling-content');
         if (!buck.length) {
             buckDiv.innerHTML = `<div class="result-box success">
@@ -2643,12 +2724,6 @@ function addApi5ctToAssembly() {
     goToTab('assembly');
 }
 
-// Initialize API 5CT table on load
-document.addEventListener('DOMContentLoaded', function initApi5ct() {
-    filterApi5ct();
-});
-
-
 // ════════════════════════════════════════════════════════════
 // ВСТРОЕННАЯ ПОМОЩЬ (INLINE HELP PANELS)
 // ════════════════════════════════════════════════════════════
@@ -2665,9 +2740,10 @@ function toggleHelp(id) {
 // ════════════════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', function initApp() {
+    // API 5CT table
+    filterApi5ct();
     // Restore last saved session
     try { restoreLastSession(); } catch (e) { /* ignore */ }
-
     // Start auto-save
     startAutoSave();
 });

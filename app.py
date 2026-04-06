@@ -95,7 +95,8 @@ def validate_assembly(assembly):
 # ════════════════════════════════════════════════════════════
 
 def johancsik_run(assembly, survey, target_depth, fluid_density,
-                  mu_default, mu_intervals, direction='down', initial_force=0.0):
+                  mu_default, mu_intervals, direction='down', initial_force=0.0,
+                  tortuosity=0.0):
     """
     Расчёт осевых нагрузок по модели Johancsik (1984).
 
@@ -150,6 +151,9 @@ def johancsik_run(assembly, survey, target_depth, fluid_density,
 
         mid = (bot + top) / 2.0
         mu = get_mu(mid, mu_intervals, mu_default)
+        # Add tortuosity: μ_eff = μ + tortuosity × dogleg (rad/m → uses dogleg already in rad)
+        if tortuosity > 0:
+            mu = mu + tortuosity * (dogleg / elem['length'] if elem['length'] > 0 else 0)
 
         F_avg = abs(F + W_ax / 2.0)
         N = math.sqrt(W_n ** 2 + (F_avg * dogleg) ** 2)
@@ -510,8 +514,9 @@ def calc_torque_drag():
         fluid_density = float(data['fluid_density'])
         mu_default    = float(data.get('mu_default', 0.25))
         mu_intervals  = data.get('mu_intervals', [])
-        op_mode       = data.get('op_mode', 'rih_slide')  # rih_slide | pooh_slide | rotate_off | rotate_on
+        op_mode       = data.get('op_mode', 'rih_slide')
         wob           = float(data.get('wob', 0.0))
+        tortuosity    = float(data.get('tortuosity', 0.0))
 
         validate_survey(survey)
         validate_assembly(assembly)
@@ -536,18 +541,19 @@ def calc_torque_drag():
         forces_rih, segs_rih = johancsik_run(
             assembly, survey, target_depth, fluid_density,
             mu_for_axial, mu_ivs_for_axial, direction='down',
-            initial_force=initial_force_down)
+            initial_force=initial_force_down, tortuosity=tortuosity)
 
         forces_pooh, segs_pooh = johancsik_run(
             assembly, survey, target_depth, fluid_density,
-            mu_for_axial, mu_ivs_for_axial, direction='up')
+            mu_for_axial, mu_ivs_for_axial, direction='up',
+            tortuosity=tortuosity)
 
         # ── Крутящий момент ───────────────────────────────
         # For rotating modes, re-run with actual μ to get realistic normal forces for torque
         if is_rotating:
             _, segs_for_torque = johancsik_run(
                 assembly, survey, target_depth, fluid_density,
-                mu_default, mu_intervals, direction='down')
+                mu_default, mu_intervals, direction='down', tortuosity=tortuosity)
         else:
             segs_for_torque = segs_rih
         torque_profile = calc_torque_profile(segs_for_torque)
@@ -716,6 +722,7 @@ def calc_reachability():
         fluid_density = float(data['fluid_density'])
         mu_default = float(data.get('mu_default', 0.25))
         mu_intervals = data.get('mu_intervals', [])
+        tortuosity = float(data.get('tortuosity', 0.0))
 
         validate_survey(survey)
         validate_assembly(assembly)
@@ -724,11 +731,11 @@ def calc_reachability():
         if total_len > target_depth:
             raise ValueError(
                 f"Суммарная длина компоновки ({total_len:.1f} м) "
-                f"превышает целевую глубину ({target_depth:.1f} м)")
+                f"превышает целевую глубину ({target_depth:.1f} М)")
 
         forces, segments = johancsik_run(
             assembly, survey, target_depth, fluid_density,
-            mu_default, mu_intervals, direction='down')
+            mu_default, mu_intervals, direction='down', tortuosity=tortuosity)
 
         reaches = True
         critical_depth = None
@@ -840,12 +847,14 @@ def calc_sensitivity():
         fluid_density = float(data['fluid_density'])
         mu_base       = float(data.get('mu_base', 0.25))
         delta_pct     = float(data.get('delta_pct', 20.0)) / 100.0
+        tortuosity    = float(data.get('tortuosity', 0.0))
 
         validate_survey(survey)
         validate_assembly(assembly)
 
         def pooh_surface(asm, td, fd, mu):
-            frc, _ = johancsik_run(asm, survey, td, fd, mu, [], direction='up')
+            frc, _ = johancsik_run(asm, survey, td, fd, mu, [], direction='up',
+                                   tortuosity=tortuosity)
             return frc[-1]['force'] if frc else 0.0
 
         def scale_assembly_weight(asm, factor):

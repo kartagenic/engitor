@@ -244,6 +244,23 @@
                                        value="0.15" step="0.01" min="0.05" max="0.8">
                             </div>
                         </div>
+                        <div class="form-row cols-3" style="margin-top:4px">
+                            <div class="form-group">
+                                <label class="form-label" title="Коэффициент извилистости — добавляет дополнительное трение от микро-изломов ствола. Типовые значения: 0 (гладкий), 0.003–0.006 (умеренный), 0.01 (сильный)">
+                                    Извилистость ствола (tortuosity)
+                                    <button class="help-btn" onclick="toggleHelp('help-tort')" title="Пояснение">ℹ</button>
+                                </label>
+                                <input type="number" class="form-input" id="mu-tortuosity"
+                                       value="0" step="0.001" min="0" max="0.05" placeholder="0">
+                            </div>
+                        </div>
+                        <div class="help-panel" id="help-tort">
+                            <strong>Извилистость ствола (Survey Tortuosity)</strong> — эмпирический поправочный коэффициент,
+                            учитывающий шероховатость ствола, не отражённую в замерах инклинометрии.
+                            Эффективный μ<sub>eff</sub> = μ + tortuosity × DLS<sub>avg</sub> × глубина.<br>
+                            <em>Упрощённая реализация: μ<sub>eff</sub>(i) = μ(i) + tortuosity × DLS(i)</em><br>
+                            Типовые значения: 0 (без поправки), 0.003 (умеренная), 0.006 (высокая)
+                        </div>
                         <div class="separator"></div>
                         <div style="margin-bottom:8px">
                             <span class="form-label" style="display:inline">Башмаки (глубины)</span>
@@ -650,6 +667,13 @@
                                     <div class="chart-container" id="td-torque-chart" style="min-height:320px"></div>
                                 </div>
 
+                                <!-- Боковая нагрузка (Side Force) -->
+                                <div style="margin-top:20px">
+                                    <div class="section-label">Боковая нагрузка (Side Force N) по глубине</div>
+                                    <div class="chart-hint">N = контактная нормальная нагрузка кН; определяет износ и риск прихвата</div>
+                                    <div class="chart-container" id="td-sideforce-chart" style="min-height:300px"></div>
+                                </div>
+
                                 <!-- Трение по элементам -->
                                 <div style="margin-top:20px">
                                     <div class="section-label">Трение по элементам компоновки</div>
@@ -682,6 +706,7 @@
                                 <!-- Изгиб -->
                                 <div style="margin-top:16px" id="td-buckling-section">
                                     <div class="section-label" style="margin-bottom:8px">Анализ продольного изгиба</div>
+                                    <div class="chart-container" id="td-buckling-chart" style="min-height:300px;margin-bottom:12px"></div>
                                     <div id="td-buckling-content"></div>
                                 </div>
                             </div>
