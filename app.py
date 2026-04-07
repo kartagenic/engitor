@@ -22,9 +22,15 @@ from reportlab.platypus import (
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+# Register Cyrillic-capable fonts for PDF export
+_DEJAVU_DIR = '/usr/share/fonts/truetype/dejavu/'
+pdfmetrics.registerFont(TTFont('DejaVuSans',      _DEJAVU_DIR + 'DejaVuSans.ttf'))
+pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', _DEJAVU_DIR + 'DejaVuSans-Bold.ttf'))
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+matplotlib.rcParams['font.family'] = 'DejaVu Sans'
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -1499,17 +1505,20 @@ def export_pdf():
                                 leftMargin=18*mm, rightMargin=18*mm,
                                 topMargin=18*mm, bottomMargin=18*mm)
 
-        styles  = getSampleStyleSheet()
-        h1_s    = ParagraphStyle('h1', parent=styles['Title'],   fontSize=17, spaceAfter=4)
-        h2_s    = ParagraphStyle('h2', parent=styles['Heading2'],fontSize=12, spaceBefore=10, spaceAfter=4)
-        h3_s    = ParagraphStyle('h3', parent=styles['Heading3'],fontSize=10, spaceBefore=6, spaceAfter=3)
-        body_s  = ParagraphStyle('bo', parent=styles['Normal'],  fontSize=8)
-        ok_s    = ParagraphStyle('ok', parent=styles['Normal'],  fontSize=9,
-                                 textColor=rl_colors.HexColor('#006400'))
-        err_s   = ParagraphStyle('er', parent=styles['Normal'],  fontSize=9,
-                                 textColor=rl_colors.HexColor('#b20000'))
-        warn_s  = ParagraphStyle('wa', parent=styles['Normal'],  fontSize=9,
-                                 textColor=rl_colors.HexColor('#7a5400'))
+        h1_s   = ParagraphStyle('h1',   fontName='DejaVuSans-Bold', fontSize=17,
+                                spaceAfter=4, alignment=1, leading=22)
+        h2_s   = ParagraphStyle('h2',   fontName='DejaVuSans-Bold', fontSize=12,
+                                spaceBefore=10, spaceAfter=4, leading=16)
+        h3_s   = ParagraphStyle('h3',   fontName='DejaVuSans-Bold', fontSize=10,
+                                spaceBefore=6,  spaceAfter=3, leading=14)
+        body_s = ParagraphStyle('body', fontName='DejaVuSans',      fontSize=8,
+                                leading=12)
+        ok_s   = ParagraphStyle('ok',   fontName='DejaVuSans',      fontSize=9,
+                                leading=13, textColor=rl_colors.HexColor('#006400'))
+        err_s  = ParagraphStyle('err',  fontName='DejaVuSans',      fontSize=9,
+                                leading=13, textColor=rl_colors.HexColor('#b20000'))
+        warn_s = ParagraphStyle('warn', fontName='DejaVuSans',      fontSize=9,
+                                leading=13, textColor=rl_colors.HexColor('#7a5400'))
 
         HC = rl_colors.HexColor
         hdr_fill  = HC('#1a3a5c')
@@ -1521,11 +1530,15 @@ def export_pdf():
         def _tbl(data_rows, col_widths, alt=True):
             t = Table(data_rows, colWidths=col_widths, repeatRows=1)
             style = [
-                ('BACKGROUND', (0,0), (-1,0), hdr_fill),
-                ('TEXTCOLOR',  (0,0), (-1,0), hdr_text),
+                ('FONTNAME',   (0,0), (-1,-1), 'DejaVuSans'),
+                ('FONTNAME',   (0,0), (-1,0),  'DejaVuSans-Bold'),
+                ('BACKGROUND', (0,0), (-1,0),  hdr_fill),
+                ('TEXTCOLOR',  (0,0), (-1,0),  hdr_text),
                 ('FONTSIZE',   (0,0), (-1,-1), 7),
                 ('GRID',       (0,0), (-1,-1), 0.35, HC('#cccccc')),
                 ('VALIGN',     (0,0), (-1,-1), 'MIDDLE'),
+                ('TOPPADDING',    (0,0), (-1,-1), 3),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 3),
             ]
             if alt:
                 style.append(('ROWBACKGROUNDS', (0,1), (-1,-1),
@@ -1802,7 +1815,7 @@ def export_pdf():
 
 def _style_header(ws, row, ncols):
     fill = PatternFill(start_color='1a3a5c', end_color='1a3a5c', fill_type='solid')
-    font = Font(color='FFFFFF', bold=True, size=9)
+    font = Font(name='Calibri', color='FFFFFF', bold=True, size=9)
     border = Border(
         bottom=Side(style='thin', color='999999'),
         right=Side(style='thin', color='DDDDDD'),
