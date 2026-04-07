@@ -603,8 +603,20 @@ document.querySelectorAll('.nav-item').forEach(item => {
         if (item.dataset.tab === 'assembly')       updateAssemblySummary();
         if (item.dataset.tab === 'analytics')      refreshAnalytics();
         if (item.dataset.tab === 'visualization')  onVizTabOpen();
+
+        closeSidebar();
     });
 });
+
+function openSidebar() {
+    document.querySelector('.sidebar').classList.add('open');
+    document.getElementById('sidebar-overlay').classList.add('visible');
+}
+
+function closeSidebar() {
+    document.querySelector('.sidebar').classList.remove('open');
+    document.getElementById('sidebar-overlay').classList.remove('visible');
+}
 
 function onVizTabOpen() {
     const hasSurvey = getSurveyData().length >= 2;

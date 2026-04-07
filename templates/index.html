@@ -13,6 +13,7 @@
 <body>
 
 <div class="app">
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
     <!-- ═══════════════════════════ SIDEBAR ═══════════════════════════ -->
     <aside class="sidebar">
         <div class="sidebar-logo">
@@ -92,6 +93,12 @@
 
     <!-- ═══════════════════════════ MAIN ═══════════════════════════ -->
     <main class="main">
+        <div class="mobile-topbar">
+            <button class="hamburger-btn" onclick="openSidebar()" aria-label="Меню">
+                <span></span><span></span><span></span>
+            </button>
+            <span class="mobile-topbar-title">WellMech</span>
+        </div>
 
         <!-- ─────────── TAB 1: СКВАЖИНА ─────────── -->
         <div class="tab-content active" id="tab-well">
