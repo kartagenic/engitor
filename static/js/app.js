@@ -1695,7 +1695,7 @@ async function calcPacker() {
                 <span class="result-icon">&#10004;</span>
                 <div class="result-text">
                     <span class="result-title">Срыв пакера безопасен</span>
-                    <span class="result-subtitle">Запас прочности: ${res.min_safety_pct}%</span>
+                    <span class="result-subtitle">Запас прочности: ${res.min_safety_pct != null ? res.min_safety_pct + '%' : '—'}</span>
                 </div>`;
         } else {
             box.className = 'result-box warning';
