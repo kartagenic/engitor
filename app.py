@@ -644,6 +644,7 @@ def calc_torque_drag():
             od_mm = s.get('od', 0)
             r = od_mm / 2000.0 if od_mm > 0 else 0.08
             dT = s['mu'] * s['N'] * r
+            linwt = s['weight_air'] / s['length'] if s['length'] > 0 else 30.0
             segments_combined.append({
                 'name':        s['name'],
                 'top':         s['top'],
@@ -658,6 +659,7 @@ def calc_torque_drag():
                 'friction_pooh': sp.get('friction', 0),
                 'torque_dT':   round(dT, 3),
                 'od':          od_mm,
+                'linwt':       round(linwt, 2),
             })
 
         stuck_pipe = calc_stuck_pipe_risk(segs_rih)

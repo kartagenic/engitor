@@ -2139,6 +2139,9 @@ async function calcTorqueDrag() {
             setTimeout(() => addDepthAnnotations('td-sideforce-chart', getFormationTops(), null), 50);
         }
 
+        // ── BHA Schematic ──
+        drawBhaSchematic(segs);
+
         // ── Таблица по элементам ──
         const segTbody = document.getElementById('td-seg-tbody');
         segTbody.innerHTML = '';
@@ -3422,3 +3425,174 @@ document.addEventListener('DOMContentLoaded', function initApp() {
     // Start auto-save
     startAutoSave();
 });
+
+// ══════════════════════════════════════════════════════════════
+//  BHA SCHEMATIC — SVG vertical well-log style panel
+// ══════════════════════════════════════════════════════════════
+function drawBhaSchematic(segs) {
+    const container = document.getElementById('bha-schematic-container');
+    if (!container || !segs || !segs.length) return;
+
+    // Layout constants
+    const SVG_W      = 700;
+    const DEPTH_W    = 52;   // left depth label column
+    const LEGEND_W   = 170;  // right legend column
+    const BHA_AREA_W = SVG_W - DEPTH_W - LEGEND_W;
+    const CENTER_X   = DEPTH_W + BHA_AREA_W / 2;
+    const PAD_TOP    = 28;
+    const PAD_BOT    = 24;
+
+    const minDepth = Math.min(...segs.map(s => s.top));
+    const maxDepth = Math.max(...segs.map(s => s.bottom));
+    const depthRange = maxDepth - minDepth || 1;
+
+    // Pixel-per-metre: aim for ~500px drawing height, clamp 0.1–8
+    const pxPerM = Math.min(8, Math.max(0.1, 500 / depthRange));
+    const SVG_H  = depthRange * pxPerM + PAD_TOP + PAD_BOT;
+
+    const maxOD = Math.max(...segs.map(s => s.od || 127), 127);
+
+    // ── Element type detection ──
+    function elemType(name) {
+        const n = (name || '').toLowerCase();
+        if (/долото|bit\b/.test(n))                          return 'bit';
+        if (/стабилиз|stabili/.test(n))                      return 'stabilizer';
+        if (/убт|collar|утяжелён/.test(n))                   return 'collar';
+        if (/яс|jar/.test(n))                                return 'jar';
+        if (/мотор|motor|двигател/.test(n))                  return 'motor';
+        if (/mwd|lwd|телемет/.test(n))                       return 'mwd';
+        if (/пакер|packer/.test(n))                          return 'packer';
+        if (/хвостовик|liner|обсадн|casing/.test(n))         return 'casing';
+        return 'pipe';
+    }
+
+    const PALETTE = {
+        bit:        '#ff6d00',
+        stabilizer: '#ab47bc',
+        collar:     '#1e88e5',
+        jar:        '#43a047',
+        motor:      '#00897b',
+        mwd:        '#fdd835',
+        packer:     '#ef5350',
+        casing:     '#78909c',
+        pipe:       '#546e7a',
+    };
+    const LABELS_RU = {
+        bit:        'Долото',
+        stabilizer: 'Стабилизатор',
+        collar:     'УБТ',
+        jar:        'Яс',
+        motor:      'ВЗД / Мотор',
+        mwd:        'MWD / LWD',
+        packer:     'Пакер',
+        casing:     'Обсадная',
+        pipe:       'Бурильная труба',
+    };
+
+    function depthY(d) { return PAD_TOP + (d - minDepth) * pxPerM; }
+
+    const parts = [];
+
+    // ── Wellbore wall lines ──
+    const wallHalf = BHA_AREA_W * 0.44;
+    parts.push(`<line x1="${CENTER_X - wallHalf}" y1="${PAD_TOP}" x2="${CENTER_X - wallHalf}" y2="${PAD_TOP + depthRange * pxPerM}" stroke="#2d3154" stroke-width="1.5"/>`);
+    parts.push(`<line x1="${CENTER_X + wallHalf}" y1="${PAD_TOP}" x2="${CENTER_X + wallHalf}" y2="${PAD_TOP + depthRange * pxPerM}" stroke="#2d3154" stroke-width="1.5"/>`);
+
+    // ── Depth grid lines & labels ──
+    const tickInt = depthRange > 3000 ? 500 : depthRange > 1000 ? 200 : depthRange > 300 ? 100 : 50;
+    const firstTick = Math.ceil(minDepth / tickInt) * tickInt;
+    for (let d = firstTick; d <= maxDepth; d += tickInt) {
+        const y = depthY(d);
+        parts.push(`<line x1="${DEPTH_W}" y1="${y}" x2="${DEPTH_W + BHA_AREA_W}" y2="${y}" stroke="#252840" stroke-width="0.8" stroke-dasharray="4,4"/>`);
+        parts.push(`<text x="${DEPTH_W - 4}" y="${y + 4}" text-anchor="end" font-size="10" fill="#676a88" font-family="Arial,sans-serif">${d}</text>`);
+    }
+
+    // ── Draw segments ──
+    segs.forEach(s => {
+        const type  = elemType(s.name);
+        const color = PALETTE[type];
+        const od    = s.od || 127;
+        const half  = Math.max(8, (od / maxOD) * (BHA_AREA_W * 0.38));
+        const y1    = depthY(s.top);
+        const y2    = depthY(s.bottom);
+        const h     = Math.max(3, y2 - y1);
+        const midY  = (y1 + y2) / 2;
+
+        if (type === 'bit') {
+            // Triangle pointing down
+            const bw = half * 1.2;
+            parts.push(`<polygon points="${CENTER_X - bw},${y1} ${CENTER_X + bw},${y1} ${CENTER_X},${y2}" fill="${color}" opacity="0.88"/>`);
+        } else if (type === 'stabilizer') {
+            // Body + wide blade band
+            const bladeHalf = half * 1.55;
+            const bladeH    = Math.max(6, h * 0.45);
+            const bladeY    = midY - bladeH / 2;
+            parts.push(`<rect x="${CENTER_X - half}" y="${y1}" width="${half * 2}" height="${h}" fill="${color}" opacity="0.82" rx="2"/>`);
+            parts.push(`<rect x="${CENTER_X - bladeHalf}" y="${bladeY}" width="${bladeHalf * 2}" height="${bladeH}" fill="${color}" opacity="0.55" rx="3"/>`);
+            // Blade tick marks
+            for (let bx = CENTER_X - bladeHalf + 6; bx < CENTER_X + bladeHalf - 3; bx += 8) {
+                parts.push(`<line x1="${bx}" y1="${bladeY}" x2="${bx}" y2="${bladeY + bladeH}" stroke="#fff" stroke-width="1" opacity="0.25"/>`);
+            }
+        } else if (type === 'motor' || type === 'mwd') {
+            // Dashed-outline body to distinguish sensor tools
+            parts.push(`<rect x="${CENTER_X - half}" y="${y1}" width="${half * 2}" height="${h}" fill="${color}" opacity="0.75" rx="2"/>`);
+            parts.push(`<rect x="${CENTER_X - half}" y="${y1}" width="${half * 2}" height="${h}" fill="none" stroke="#fff" stroke-width="1" stroke-dasharray="4,3" opacity="0.35" rx="2"/>`);
+        } else if (type === 'jar') {
+            // Jar: body with spring symbol (horizontal lines)
+            parts.push(`<rect x="${CENTER_X - half}" y="${y1}" width="${half * 2}" height="${h}" fill="${color}" opacity="0.80" rx="2"/>`);
+            const step = Math.max(4, h / 5);
+            for (let ky = y1 + step; ky < y2 - 1; ky += step) {
+                parts.push(`<line x1="${CENTER_X - half + 3}" y1="${ky}" x2="${CENTER_X + half - 3}" y2="${ky}" stroke="#fff" stroke-width="1" opacity="0.3"/>`);
+            }
+        } else {
+            parts.push(`<rect x="${CENTER_X - half}" y="${y1}" width="${half * 2}" height="${h}" fill="${color}" opacity="0.80" rx="2"/>`);
+        }
+
+        // OD annotation line on right edge
+        const odMm = Math.round(od);
+        if (h > 14) {
+            parts.push(`<text x="${CENTER_X + half + 4}" y="${midY + 4}" font-size="9" fill="${color}" font-family="Arial,sans-serif" opacity="0.85">${odMm}mm</text>`);
+        }
+
+        // Name label (inside rect if tall enough)
+        if (h > 18) {
+            const label = s.name.length > 20 ? s.name.slice(0, 18) + '…' : s.name;
+            parts.push(`<text x="${CENTER_X}" y="${midY + 4}" text-anchor="middle" font-size="10" fill="#fff" font-family="Arial,sans-serif" font-weight="bold" opacity="0.95">${escSvg(label)}</text>`);
+        }
+    });
+
+    // ── Surface marker ──
+    const surfY = depthY(minDepth);
+    parts.push(`<line x1="${DEPTH_W}" y1="${surfY}" x2="${DEPTH_W + BHA_AREA_W}" y2="${surfY}" stroke="#4a4d65" stroke-width="1.5"/>`);
+    parts.push(`<text x="${DEPTH_W + 4}" y="${surfY - 4}" font-size="9" fill="#676a88" font-family="Arial,sans-serif">${Math.round(minDepth)} м</text>`);
+
+    // ── TD marker ──
+    const tdY = depthY(maxDepth);
+    parts.push(`<line x1="${DEPTH_W}" y1="${tdY}" x2="${DEPTH_W + BHA_AREA_W}" y2="${tdY}" stroke="#4a4d65" stroke-width="1.5" stroke-dasharray="5,3"/>`);
+    parts.push(`<text x="${DEPTH_W + 4}" y="${tdY + 12}" font-size="9" fill="#676a88" font-family="Arial,sans-serif">${Math.round(maxDepth)} м (TD)</text>`);
+
+    // ── Legend ──
+    const seenTypes = [...new Set(segs.map(s => elemType(s.name)))];
+    let legY = PAD_TOP + 10;
+    parts.push(`<text x="${DEPTH_W + BHA_AREA_W + 10}" y="${legY}" font-size="11" fill="#8b8fa8" font-family="Arial,sans-serif" font-weight="bold">Легенда</text>`);
+    legY += 16;
+    seenTypes.forEach(t => {
+        parts.push(`<rect x="${DEPTH_W + BHA_AREA_W + 10}" y="${legY}" width="12" height="12" fill="${PALETTE[t]}" opacity="0.85" rx="2"/>`);
+        parts.push(`<text x="${DEPTH_W + BHA_AREA_W + 26}" y="${legY + 10}" font-size="10" fill="#c0c4de" font-family="Arial,sans-serif">${LABELS_RU[t] || t}</text>`);
+        legY += 18;
+    });
+
+    // ── Title ──
+    parts.push(`<text x="${DEPTH_W + BHA_AREA_W / 2}" y="16" text-anchor="middle" font-size="12" fill="#8b8fa8" font-family="Arial,sans-serif">Глубина (м)</text>`);
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${SVG_W} ${SVG_H}" style="background:#151829;border-radius:8px;display:block;max-height:600px">
+        <rect width="${SVG_W}" height="${SVG_H}" fill="#151829" rx="8"/>
+        ${parts.join('\n        ')}
+    </svg>`;
+
+    container.innerHTML = svg;
+}
+
+function escSvg(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
