@@ -13,83 +13,63 @@
 <body>
 
 <div class="app">
-    <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
-    <!-- ═══════════════════════════ SIDEBAR ═══════════════════════════ -->
-    <aside class="sidebar">
-        <div class="sidebar-logo">
+    <!-- ═══════════════════════════ TOP NAVBAR ═══════════════════════════ -->
+    <header class="topnav">
+        <div class="topnav-logo">
             <span class="logo-icon">W</span>
             <span class="logo-text">WellMech</span>
         </div>
-        <nav class="sidebar-nav">
+        <nav class="topnav-nav">
             <div class="nav-item active" data-tab="well">
                 <span class="nav-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="2" x2="12" y2="22"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"/></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="2" x2="12" y2="22"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10"/></svg>
                 </span>
                 Скважина
             </div>
             <div class="nav-item" data-tab="assembly">
                 <span class="nav-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
                 </span>
                 Компоновка
             </div>
             <div class="nav-item" data-tab="calculations">
                 <span class="nav-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                 </span>
                 Расчёты
             </div>
             <div class="nav-item" data-tab="visualization">
                 <span class="nav-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 4-4"/></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 16l4-4 4 4 4-4"/></svg>
                 </span>
                 Визуализация
             </div>
             <div class="nav-item" data-tab="analytics">
                 <span class="nav-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="6" height="18"/><rect x="9" y="8" width="6" height="13"/><rect x="16" y="13" width="6" height="8"/></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="6" height="18"/><rect x="9" y="8" width="6" height="13"/><rect x="16" y="13" width="6" height="8"/></svg>
                 </span>
                 Аналитика
             </div>
             <div class="nav-item" data-tab="export">
                 <span class="nav-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 </span>
                 Экспорт
             </div>
         </nav>
-        <button class="theme-toggle" onclick="toggleTheme()" id="theme-toggle-btn">
-            <span id="theme-toggle-label">Светлая тема</span>
-            <span class="theme-toggle-track"><span class="theme-toggle-thumb"></span></span>
-        </button>
-        <button class="theme-toggle" onclick="toggleUnits()" id="units-toggle-btn" style="margin-top:6px">
-            <span id="units-toggle-label">Field Units</span>
-            <span class="theme-toggle-track"><span id="units-toggle-thumb" class="theme-toggle-thumb"></span></span>
-        </button>
-
-        <!-- ── Project management ── -->
-        <div class="project-panel">
-            <div class="project-name-row">
-                <input type="text" id="project-name" class="project-name-input" placeholder="Без названия" maxlength="40">
-                <span id="project-saved-label" class="project-saved-label"></span>
+        <div class="topnav-tools">
+            <input type="text" id="project-name" class="project-name-input" placeholder="Без названия" maxlength="40">
+            <span id="project-saved-label" class="project-saved-label"></span>
+            <button class="btn btn-secondary btn-sm" onclick="saveProject()" title="Сохранить проект">Сохранить</button>
+            <button class="btn btn-ghost btn-sm" onclick="showProjectList()" title="Управление проектами">Проекты</button>
+            <div class="units-switch" onclick="toggleUnits()" role="button" tabindex="0" title="Переключить единицы измерения">
+                <span class="units-opt" id="units-opt-field">Field</span>
+                <span class="switch-track"><span class="switch-thumb" id="units-toggle-thumb"></span></span>
+                <span class="units-opt" id="units-opt-si">SI</span>
             </div>
-            <div class="project-btn-row">
-                <button class="btn btn-secondary btn-sm" onclick="saveProject()" title="Сохранить проект">Сохранить</button>
-                <button class="btn btn-ghost btn-sm" onclick="newProject()" title="Новый проект">Новый</button>
-            </div>
-            <div class="project-btn-row" style="margin-top:4px">
-                <button class="btn btn-ghost btn-sm" onclick="exportProject()" title="Экспорт .wm файла">↓ .wm</button>
-                <label class="btn btn-ghost btn-sm" title="Импорт .wm файла" style="cursor:pointer;text-align:center">
-                    ↑ .wm<input type="file" accept=".wm,.json" onchange="importProject(event)" style="display:none">
-                </label>
-                <button class="btn btn-ghost btn-sm" onclick="showProjectList()" title="Список проектов">Проекты</button>
-            </div>
+            <button class="icon-btn" onclick="toggleTheme()" title="Сменить тему" id="theme-toggle-btn">🌙</button>
         </div>
-
-        <div class="sidebar-footer">
-            WellMech v1.0<br>Модель Johancsik, 1984
-        </div>
-    </aside>
+    </header>
 
     <!-- ═══════════════════════════ MAIN ═══════════════════════════ -->
     <main class="main">
@@ -1529,6 +1509,13 @@
         <div class="modal-header">
             <span class="modal-title">Сохранённые проекты</span>
             <button class="modal-close" onclick="closeProjectModal()">×</button>
+        </div>
+        <div style="display:flex;gap:8px;padding:12px 20px;border-bottom:1px solid var(--border)">
+            <button class="btn btn-ghost btn-sm" onclick="newProject();closeProjectModal()">+ Новый</button>
+            <button class="btn btn-ghost btn-sm" onclick="exportProject()">↓ .wm</button>
+            <label class="btn btn-ghost btn-sm" style="cursor:pointer;text-align:center">
+                ↑ .wm<input type="file" accept=".wm,.json" onchange="importProject(event);closeProjectModal()" style="display:none">
+            </label>
         </div>
         <div class="modal-body" id="project-list-container">
             <div style="color:var(--text-muted);font-size:13px">Нет сохранённых проектов</div>

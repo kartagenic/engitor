@@ -47,12 +47,13 @@ function applyUnitLabels() {
         const type = el.getAttribute('data-unit');
         if (UNITS[unitSystem][type]) el.textContent = UNITS[unitSystem][type];
     });
-    // Toggle label shows CURRENT active system
-    const lbl = document.getElementById('units-toggle-label');
-    if (lbl) lbl.textContent = unitSystem === 'field' ? 'Field Units' : 'SI';
-    // Thumb position: right = field active
-    const thumb = document.getElementById('units-toggle-thumb');
-    if (thumb) thumb.style.transform = unitSystem === 'field' ? 'translateX(20px)' : '';
+    // Units toggle: thumb slides toward active side
+    const thumb    = document.getElementById('units-toggle-thumb');
+    const optSI    = document.getElementById('units-opt-si');
+    const optField = document.getElementById('units-opt-field');
+    if (thumb)    thumb.style.transform   = unitSystem === 'si' ? 'translateX(14px)' : '';
+    if (optSI)    optSI.style.color       = unitSystem === 'si'    ? 'var(--text-primary)' : 'var(--text-muted)';
+    if (optField) optField.style.color    = unitSystem === 'field' ? 'var(--text-primary)' : 'var(--text-muted)';
 }
 
 function convertInputValues() {
@@ -520,8 +521,8 @@ function toggleTheme() {
 }
 
 function updateThemeLabel(theme) {
-    const el = document.getElementById('theme-toggle-label');
-    if (el) el.textContent = theme === 'dark' ? 'Светлая тема' : 'Тёмная тема';
+    const btn = document.getElementById('theme-toggle-btn');
+    if (btn) btn.textContent = theme === 'dark' ? '🌙' : '☀️';
 }
 
 // ── Динамический Plotly layout, зависящий от темы ──
