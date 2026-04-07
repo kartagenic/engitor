@@ -2655,7 +2655,15 @@ async function renderTdEnvelope() {
         .filter(cb => cb.checked).map(cb => cb.value);
     if (!ops.length) { status.textContent = 'Выберите операции'; return; }
 
-    const baseReq = collectRequestData(state.targetDepth);
+    // Resolve target depth: prefer T&D tab input, fall back to assembly total length
+    const asmData = getAssemblyData();
+    if (!asmData.length) { status.textContent = 'Нет данных компоновки'; return; }
+    const tdInputRaw = parseFloat(document.getElementById('td-target-depth')?.value) || 0;
+    const tdDisplay  = tdInputRaw > 0
+        ? tdInputRaw
+        : fromSI(asmData.reduce((s, e) => s + e.length, 0), 'depth');
+
+    const baseReq = collectRequestData(tdDisplay);
     if (!baseReq.assembly || !baseReq.assembly.length) {
         status.textContent = 'Нет данных компоновки'; return;
     }
