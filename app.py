@@ -174,63 +174,91 @@ def johancsik_run(assembly, survey, target_depth, fluid_density,
     segments = []
     F = initial_force
 
+    # Collect survey depths for sub-element splitting
+    min_depth = target_depth - sum(e['length'] for e in assembly)
+    survey_depth_set = set(
+        s['depth'] for s in survey
+        if min_depth <= s['depth'] <= target_depth
+    )
+
     for elem in assembly:
         bot = current_depth
         top = current_depth - elem['length']
 
-        incl_bot, azim_bot = interpolate_survey(survey, bot)
-        incl_top, azim_top = interpolate_survey(survey, top)
+        # Split element at survey stations that fall within it.
+        # This ensures each sub-element has a small inclination change,
+        # greatly improving accuracy for long elements (e.g. 2000m drill pipe).
+        inner = sorted(
+            [d for d in survey_depth_set if top < d < bot],
+            reverse=True
+        )
+        depth_bounds = [bot] + inner + [top]
 
-        ib = math.radians(incl_bot)
-        it = math.radians(incl_top)
-        ab = math.radians(azim_bot)
-        at_ = math.radians(azim_top)
+        elem_N_total = 0.0
+        elem_friction_total = 0.0
 
-        i_avg = (ib + it) / 2.0
-        di = it - ib
-        da = at_ - ab
-        # нормализация азимута
-        if da > math.pi:
-            da -= 2 * math.pi
-        elif da < -math.pi:
-            da += 2 * math.pi
+        for k in range(len(depth_bounds) - 1):
+            sb = depth_bounds[k]
+            st = depth_bounds[k + 1]
+            sl = sb - st
+            if sl <= 0:
+                continue
+            frac = sl / elem['length']
 
-        dogleg = math.sqrt(di ** 2 + (da * math.sin(i_avg)) ** 2)
+            incl_bot, azim_bot = interpolate_survey(survey, sb)
+            incl_top, azim_top = interpolate_survey(survey, st)
 
-        W_b = elem['weight_air'] * bf * G / 1000.0  # кН
-        W_ax = W_b * math.cos(i_avg)
-        W_n = W_b * math.sin(i_avg)
+            ib = math.radians(incl_bot)
+            it = math.radians(incl_top)
+            ab = math.radians(azim_bot)
+            at_ = math.radians(azim_top)
 
-        mid = (bot + top) / 2.0
-        mu = get_mu(mid, mu_intervals, mu_default)
-        # Add tortuosity: μ_eff = μ + tortuosity × dogleg (rad/m → uses dogleg already in rad)
-        if tortuosity > 0:
-            mu = mu + tortuosity * (dogleg / elem['length'] if elem['length'] > 0 else 0)
-        # μ for torque (SPE-105068: separate from drag μ)
-        mu_t = (mu_torque if mu_torque is not None else mu)
+            i_avg = (ib + it) / 2.0
+            di = it - ib
+            da = at_ - ab
+            if da > math.pi:
+                da -= 2 * math.pi
+            elif da < -math.pi:
+                da += 2 * math.pi
 
-        F_avg = abs(F + W_ax / 2.0)
-        N = math.sqrt(W_n ** 2 + (F_avg * dogleg) ** 2)
+            sub_weight_air = elem['weight_air'] * frac
+            W_b = sub_weight_air * bf * G / 1000.0  # кН
+            W_ax = W_b * math.cos(i_avg)
+            W_n  = W_b * math.sin(i_avg)
 
-        # ── Stiff String correction (Mitchell 1986 simplified) ──
-        if use_stiff_string and elem['length'] > 0:
-            EI = calc_EI(elem.get('od', 127.0), elem.get('linwt', 30.0))
-            # Bending correction per unit length [kN]
-            q_bend = 2.0 * EI * (dogleg / elem['length']) / (elem['length'] * 1000.0)
-            N = max(0.0, N - q_bend * elem['length'])
+            mid = (sb + st) / 2.0
+            mu = get_mu(mid, mu_intervals, mu_default)
+            if tortuosity > 0:
+                mu = mu + tortuosity * (math.sqrt(di**2 + (da*math.sin(i_avg))**2) / sl
+                                        if sl > 0 else 0)
+            mu_t = (mu_torque if mu_torque is not None else mu)
 
-        # ── Centralizer standoff reduction ──
-        mid_c = (bot + top) / 2.0
-        standoff = get_centralizer_factor(mid_c, centralizers or [])
-        N_eff = N * (1.0 - standoff) if standoff < 1.0 else N
+            F_avg = abs(F + W_ax / 2.0)
+            dogleg = math.sqrt(di ** 2 + (da * math.sin(i_avg)) ** 2)
+            N = math.sqrt(W_n ** 2 + (F_avg * dogleg) ** 2)
 
-        friction = mu * N_eff
+            # Stiff String correction
+            if use_stiff_string and sl > 0:
+                EI = calc_EI(elem.get('od', 127.0), elem.get('linwt', 30.0))
+                q_bend = 2.0 * EI * (dogleg / sl) / (sl * 1000.0)
+                N = max(0.0, N - q_bend * sl)
 
-        if direction == 'down':
-            F_top = F + W_ax - friction
-        else:
-            F_top = F + W_ax + friction
+            # Centralizer
+            standoff = get_centralizer_factor(mid, centralizers or [])
+            N_eff = N * (1.0 - standoff) if standoff < 1.0 else N
 
+            friction = mu * N_eff
+
+            if direction == 'down':
+                F_top = F + W_ax - friction
+            else:
+                F_top = F + W_ax + friction
+
+            elem_N_total       += N
+            elem_friction_total += friction
+            F = F_top
+
+        # Record one entry per assembly element (aggregated)
         seg = {
             'name': elem['name'],
             'bottom': round(bot, 2),
@@ -241,27 +269,26 @@ def johancsik_run(assembly, survey, target_depth, fluid_density,
             'max_load': elem.get('max_load', 0),
             'incl_bot': round(incl_bot, 2),
             'incl_top': round(incl_top, 2),
-            'W_b': round(W_b, 3),
-            'N': round(N, 3),
-            'N_eff': round(N_eff, 3),
-            'friction': round(friction, 3),
-            'F_bottom': round(F, 3),
-            'F_top': round(F_top, 3),
-            'mu': mu,
-            'mu_torque': mu_t,
-            'standoff': round(standoff, 3),
+            'W_b': round(elem['weight_air'] * bf * G / 1000.0, 3),
+            'N': round(elem_N_total, 3),
+            'N_eff': round(elem_N_total, 3),
+            'friction': round(elem_friction_total, 3),
+            'F_bottom': round(segments[-1]['F_top'] if segments else initial_force, 3),
+            'F_top': round(F, 3),
+            'mu': mu_default,
+            'mu_torque': mu_torque if mu_torque is not None else mu_default,
+            'standoff': 1.0,
         }
         segments.append(seg)
 
         forces.append({
             'depth': round(top, 2),
-            'force': round(F_top, 3),
+            'force': round(F, 3),
             'element': elem['name'],
-            'W_b': round(W_b, 3),
-            'N': round(N, 3),
-            'friction': round(friction, 3),
+            'W_b': round(seg['W_b'], 3),
+            'N': round(elem_N_total, 3),
+            'friction': round(elem_friction_total, 3),
         })
-        F = F_top
         current_depth = top
 
     return forces, segments

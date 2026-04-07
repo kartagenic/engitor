@@ -428,3 +428,80 @@ class TestGetMu:
     def test_outside_interval_returns_default(self):
         intervals = [{'depth_from': 400, 'depth_to': 600, 'mu': 0.35}]
         assert wellmech.get_mu(700.0, intervals, 0.25) == 0.25
+
+
+# ─────────────────────────────────────────────────────────────
+# 11. WellPlan benchmark — IH-1 (real well data)
+# ─────────────────────────────────────────────────────────────
+
+class TestWellPlanBenchmarkIH1:
+    """
+    Physics invariants verified against WellPlan IH-1 well data.
+    Platform well, brine 812 kg/m³, μ=0.23, TD=2450m.
+    String: Tubing L-80 OD=139.7mm, linwt=25.3 kg/m (2448m) + Packer 2m.
+
+    Note: Exact WellPlan match (38.62 / 67.06 t) requires the full 120-point
+    survey. This test uses a representative 11-point summary and verifies
+    physics invariants: bracket, symmetry, drag sign, free-hanging bounds.
+    Full numerical match is verified in reports/verification_script.py.
+    """
+
+    SURVEY = [
+        {'depth':    0.0, 'inclination':  0.00, 'azimuth':   0.00},
+        {'depth':  200.0, 'inclination':  0.70, 'azimuth':  73.14},
+        {'depth':  500.0, 'inclination':  3.45, 'azimuth': 131.06},
+        {'depth':  700.0, 'inclination': 23.51, 'azimuth': 136.10},
+        {'depth':  900.0, 'inclination': 30.30, 'azimuth': 345.77},
+        {'depth': 1100.0, 'inclination': 27.12, 'azimuth': 129.92},
+        {'depth': 1400.0, 'inclination':  9.15, 'azimuth': 102.91},
+        {'depth': 1800.0, 'inclination': 14.83, 'azimuth': 331.57},
+        {'depth': 2100.0, 'inclination': 40.25, 'azimuth': 324.77},
+        {'depth': 2370.0, 'inclination': 58.00, 'azimuth': 321.06},
+        {'depth': 2458.0, 'inclination': 60.24, 'azimuth': 323.39},
+    ]
+
+    ASSEMBLY = [
+        {'name': 'Packer',      'length': 2.0,    'od': 214.0, 'id': 100.5,
+         'weight_air': 100.0,   'weight_per_unit': 50.0},
+        {'name': 'Tubing L-80', 'length': 2448.0, 'od': 139.7, 'id': 124.26,
+         'weight_air': 2448.0 * 25.3, 'weight_per_unit': 25.3},
+    ]
+
+    TD = 2450.0
+    RHO = 0.812
+    MU  = 0.23
+
+    def test_trip_out_greater_than_trip_in(self):
+        """POOH hookload must exceed RIH hookload in deviated well."""
+        ri, _ = wellmech.johancsik_run(
+            self.ASSEMBLY, self.SURVEY, self.TD, self.RHO, self.MU, None, 'down')
+        ro, _ = wellmech.johancsik_run(
+            self.ASSEMBLY, self.SURVEY, self.TD, self.RHO, self.MU, None, 'up')
+        assert ro[-1]['force'] > ri[-1]['force']
+
+    def test_free_hanging_between_rih_and_pooh(self):
+        """Free hanging weight must be between RIH and POOH hookloads."""
+        ri, _ = wellmech.johancsik_run(
+            self.ASSEMBLY, self.SURVEY, self.TD, self.RHO, self.MU, None, 'down')
+        ro, _ = wellmech.johancsik_run(
+            self.ASSEMBLY, self.SURVEY, self.TD, self.RHO, self.MU, None, 'up')
+        r0, _ = wellmech.johancsik_run(
+            self.ASSEMBLY, self.SURVEY, self.TD, self.RHO, 0.0, None, 'down')
+        ti = ri[-1]['force']; to = ro[-1]['force']; fh = r0[-1]['force']
+        assert ti <= fh <= to, f"TI={ti/9.81:.2f} FH={fh/9.81:.2f} TO={to/9.81:.2f}"
+
+    def test_wellplan_rih_range(self):
+        """RIH hookload within 15t of WellPlan 38.62t (simplified survey tolerance)."""
+        ri, _ = wellmech.johancsik_run(
+            self.ASSEMBLY, self.SURVEY, self.TD, self.RHO, self.MU, None, 'down')
+        hook_t = ri[-1]['force'] / 9.81
+        assert abs(hook_t - 38.62) < 15.0, (
+            f"TripIn={hook_t:.2f}t, WellPlan=38.62t")
+
+    def test_wellplan_pooh_range(self):
+        """POOH hookload within 25t of WellPlan 67.06t (simplified survey tolerance)."""
+        ro, _ = wellmech.johancsik_run(
+            self.ASSEMBLY, self.SURVEY, self.TD, self.RHO, self.MU, None, 'up')
+        hook_t = ro[-1]['force'] / 9.81
+        assert abs(hook_t - 67.06) < 25.0, (
+            f"TripOut={hook_t:.2f}t, WellPlan=67.06t")
