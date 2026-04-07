@@ -74,13 +74,13 @@ function convertInputValues() {
     const asmRows = document.getElementById('assembly-tbody').rows;
     for (const row of asmRows) {
         const inputs = row.querySelectorAll('input[type="number"]');
-        // [0]=len(depth), [1]=weight, [2]=od, [3]=wtPerUnit(linwt), [4]=maxLoad(force)
-        const types = ['depth', 'weight', 'od', 'linwt', 'force'];
+        // [0]=len, [1]=weight, [2]=od, [3]=id(mm→no unit convert needed), [4]=linwt, [5]=maxLoad
+        const types = ['depth', 'weight', 'od', null, 'linwt', 'force'];
         inputs.forEach((inp, i) => {
             const type = types[i];
             if (!type) return;
             // Don't convert auto-calculated maxLoad — recalculate it instead
-            if (i === 4 && inp.dataset.auto === 'true') { inp.value = ''; return; }
+            if (i === 5 && inp.dataset.auto === 'true') { inp.value = ''; return; }
             const val = parseFloat(inp.value);
             if (!isNaN(val) && val !== 0) {
                 if (unitSystem === 'field') {
@@ -1051,8 +1051,9 @@ function saveBhaTemplate() {
             len:     nums[0]?.value ?? '',
             weight:  nums[1]?.value ?? '',
             od:      nums[2]?.value ?? '',
-            linwt:   nums[3]?.value ?? '',
-            maxLoad: nums[4]?.value ?? '',
+            id_mm:   nums[3]?.value ?? '',
+            linwt:   nums[4]?.value ?? '',
+            maxLoad: nums[5]?.value ?? '',
             grade:   tr.querySelector('select.grade-sel')?.value ?? '',
             conn:    tr.querySelector('select.conn-sel')?.value ?? '',
         });
@@ -1229,11 +1230,11 @@ function autoCalcMaxLoad(tr) {
     const numInputs = tr.querySelectorAll('input[type="number"]');
     const gradeEl   = tr.querySelector('select.grade-sel');
     const connEl    = tr.querySelector('select.conn-sel');
-    const maxInp    = numInputs[4];
+    const maxInp    = numInputs[5];
     if (!maxInp || !gradeEl || !connEl) return;
 
     const odDisp    = parseFloat(numInputs[2].value);
-    const linwtDisp = parseFloat(numInputs[3].value);
+    const linwtDisp = parseFloat(numInputs[4].value);
     const grade     = gradeEl.value;
     const conn      = connEl.value;
 
@@ -1294,7 +1295,8 @@ function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit, grade, conn,
     const lenInp    = inputs[0];
     const weightInp = inputs[1];
     const odInp     = inputs[2];
-    const wtPuInp   = inputs[3];
+    // inputs[3] is the ID column added later; linwt is at index 4
+    const wtPuInp   = inputs[4];
 
     // Auto-weight from linwt × length
     const recalcWeight = () => {
