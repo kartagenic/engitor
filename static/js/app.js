@@ -223,6 +223,16 @@ function getProjectData() {
         unitSystem,
         wellMeta: getWellMetadata(),
         fluidDensity: document.getElementById('fluid-density').value,
+        fluidRheologyModel: document.getElementById('fluid-rheology-model')?.value ?? 'newtonian',
+        fluidBaseType:      document.getElementById('fluid-base-type')?.value ?? 'wbm',
+        fluidPv:            document.getElementById('fluid-pv')?.value ?? '24',
+        fluidYp:            document.getElementById('fluid-yp')?.value ?? '5',
+        fluidTemp:          document.getElementById('fluid-temp')?.value ?? '60',
+        datumType:          document.getElementById('datum-type')?.value ?? 'onshore',
+        datumWellheadElev:  document.getElementById('datum-wellhead-elev')?.value ?? '35',
+        datumAirGap:        document.getElementById('datum-air-gap')?.value ?? '20',
+        datumWaterDepth:    document.getElementById('datum-water-depth')?.value ?? '80',
+        datumMudlineTvd:    document.getElementById('datum-mudline-tvd')?.value ?? '80',
         muOpenhole: document.getElementById('mu-openhole').value,
         muCased:    document.getElementById('mu-cased').value,
         muLiner:    document.getElementById('mu-liner').value,
@@ -1446,6 +1456,11 @@ function updatePackerSelect() {
 // ОБЩИЕ ФУНКЦИИ
 // ════════════════════════════════════════════════════════════
 
+function toggleDatumFields() {
+    const isOffshore = document.getElementById('datum-type').value === 'offshore';
+    document.getElementById('datum-offshore-fields').style.display = isOffshore ? '' : 'none';
+}
+
 function collectRequestData(targetDepth) {
     return {
         survey: getSurveyData(),
@@ -1456,6 +1471,13 @@ function collectRequestData(targetDepth) {
         mu_intervals: getMuIntervals(),
         tortuosity: parseFloat(document.getElementById('mu-tortuosity')?.value) || 0,
         centralizers: getCentralizerData(),
+        datum: {
+            type: document.getElementById('datum-type')?.value || 'onshore',
+            wellhead_elev: parseFloat(document.getElementById('datum-wellhead-elev')?.value) || 35,
+            air_gap: parseFloat(document.getElementById('datum-air-gap')?.value) || 20,
+            water_depth: parseFloat(document.getElementById('datum-water-depth')?.value) || 80,
+            mudline_tvd: parseFloat(document.getElementById('datum-mudline-tvd')?.value) || 80,
+        },
     };
 }
 
@@ -1982,6 +2004,9 @@ async function calcTorqueDrag() {
         state.results.torqueDrag = res;
         document.getElementById('td-results').style.display = '';
 
+        // Trigger fan chart in background
+        calcTdFan(data);
+
         // ── KPI Stats ──
         const dragWindow = (res.hookload_pooh - res.hookload_rih).toFixed(1);
         document.getElementById('td-kpi-stats').innerHTML = `
@@ -2062,6 +2087,21 @@ async function calcTorqueDrag() {
             const rigCap = parseFloat(document.getElementById('rig-hook-capacity')?.value);
             const rigCapSI = rigCap > 0 ? toSI(rigCap, 'force') : null;
             addDepthAnnotations('td-drag-chart', getFormationTops(), rigCapSI);
+
+            // Add MSL/Mudline lines to drag chart
+            const datumType = document.getElementById('datum-type')?.value;
+            if (datumType === 'offshore') {
+                const mudlineTvd = parseFloat(document.getElementById('datum-mudline-tvd')?.value) || 0;
+                if (mudlineTvd > 0) {
+                    Plotly.relayout('td-drag-chart', {
+                        'shapes[1]': {
+                            type: 'line', x0: 0, x1: 1, y0: mudlineTvd, y1: mudlineTvd,
+                            xref: 'paper', yref: 'y',
+                            line: { color: '#00bcd4', width: 1.5, dash: 'dash' },
+                        },
+                    }).catch(() => {});
+                }
+            }
         }, 50);
 
         // ── Torque-график ──
@@ -2256,6 +2296,123 @@ async function calcTorqueDrag() {
     } finally {
         document.getElementById('td-spinner').style.display = 'none';
         document.getElementById('btn-calc-td').disabled = false;
+    }
+}
+
+
+async function calcTdFan(baseData) {
+    const fanSpinner = document.getElementById('td-fan-spinner');
+    const fanChart   = document.getElementById('td-fan-chart');
+    if (!fanSpinner || !fanChart) return;
+
+    fanSpinner.style.display = '';
+    fanChart.innerHTML = '';
+
+    try {
+        const res = await apiPost('/api/calculate/td_fan', {
+            survey:           baseData.survey,
+            assembly:         baseData.assembly,
+            target_depth:     baseData.target_depth,
+            fluid_density:    baseData.fluid_density,
+            mu_intervals:     baseData.mu_intervals || [],
+            tortuosity:       baseData.tortuosity   || 0,
+            centralizers:     baseData.centralizers || [],
+            use_stiff_string: baseData.use_stiff_string || false,
+        });
+
+        if (!res.success) return;
+
+        // Color palette for μ values (light → dark)
+        const rihColors  = ['#81c784','#4caf50','#388e3c','#1b5e20','#0d2e10','#052008'];
+        const poohColors = ['#90caf9','#64b5f6','#1976d2','#0d47a1','#062a6e','#030f2b'];
+        const muLabels   = res.fan_rih.map(f => `μ=${f.mu.toFixed(2)}`);
+
+        const traces = [];
+
+        res.fan_rih.forEach((fan, i) => {
+            traces.push({
+                x: fan.forces.map(f => f.force),
+                y: fan.forces.map(f => f.depth),
+                type: 'scatter', mode: 'lines',
+                line: { color: rihColors[i] || '#4caf50', width: 1.8 },
+                name: `RIH ${muLabels[i]}`,
+                legendgroup: `rih_${i}`,
+                hovertemplate: `<b>RIH ${muLabels[i]}</b><br>Глубина: %{y:.0f} м<br>Tension: %{x:.1f} кН<extra></extra>`,
+            });
+        });
+
+        res.fan_pooh.forEach((fan, i) => {
+            traces.push({
+                x: fan.forces.map(f => f.force),
+                y: fan.forces.map(f => f.depth),
+                type: 'scatter', mode: 'lines',
+                line: { color: poohColors[i] || '#1976d2', width: 1.8, dash: 'dot' },
+                name: `POOH ${muLabels[i]}`,
+                legendgroup: `pooh_${i}`,
+                hovertemplate: `<b>POOH ${muLabels[i]}</b><br>Глубина: %{y:.0f} м<br>Tension: %{x:.1f} кН<extra></extra>`,
+            });
+        });
+
+        // Rig capacity vertical line
+        const rigCap = parseFloat(document.getElementById('rig-hook-capacity')?.value);
+        const shapes = [];
+        if (rigCap > 0) {
+            const rigCapSI = toSI(rigCap, 'force');
+            shapes.push({
+                type: 'line', x0: rigCapSI, x1: rigCapSI, y0: 0, y1: 1,
+                xref: 'x', yref: 'paper',
+                line: { color: '#ff1744', width: 2, dash: 'solid' },
+            });
+        }
+
+        // MSL / Mudline annotations
+        const datumType = document.getElementById('datum-type')?.value;
+        const annotations = [];
+        if (datumType === 'offshore') {
+            const mudlineTvd = parseFloat(document.getElementById('datum-mudline-tvd')?.value) || 0;
+            if (mudlineTvd > 0) {
+                shapes.push({
+                    type: 'line', x0: 0, x1: 1, y0: mudlineTvd, y1: mudlineTvd,
+                    xref: 'paper', yref: 'y',
+                    line: { color: '#00bcd4', width: 1.5, dash: 'dash' },
+                });
+                annotations.push({
+                    x: 0.02, y: mudlineTvd, xref: 'paper', yref: 'y',
+                    text: 'Mudline', showarrow: false,
+                    font: { color: '#00bcd4', size: 10 },
+                    xanchor: 'left', yanchor: 'bottom',
+                });
+                // MSL at depth 0
+                shapes.push({
+                    type: 'line', x0: 0, x1: 1, y0: 0, y1: 0,
+                    xref: 'paper', yref: 'y',
+                    line: { color: '#4fc3f7', width: 1, dash: 'dash' },
+                });
+                annotations.push({
+                    x: 0.02, y: 0, xref: 'paper', yref: 'y',
+                    text: 'Mean Sea Level', showarrow: false,
+                    font: { color: '#4fc3f7', size: 10 },
+                    xanchor: 'left', yanchor: 'bottom',
+                });
+            }
+        }
+
+        _plot('td-fan-chart', traces, {
+            xaxis: { title: 'Effective Tension (кН)', zeroline: true, zerolinewidth: 1.5 },
+            yaxis: { autorange: 'reversed', title: 'Measured Depth (м)' },
+            height: 420,
+            shapes,
+            annotations,
+            legend: { orientation: 'v', x: 1.02, y: 1 },
+        });
+
+        // Add formation tops
+        setTimeout(() => addDepthAnnotations('td-fan-chart', getFormationTops(), null), 50);
+
+    } catch(e) {
+        console.warn('Fan chart error:', e);
+    } finally {
+        fanSpinner.style.display = 'none';
     }
 }
 

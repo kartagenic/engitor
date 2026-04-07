@@ -689,6 +689,54 @@ def calc_torque_drag():
         return jsonify(success=False, error=f"Ошибка расчёта T&D: {e}")
 
 
+@app.route('/api/calculate/td_fan', methods=['POST'])
+def calc_td_fan():
+    """
+    Веер кривых T&D при μ = 0.10 … 0.35.
+    Возвращает профили Effective Tension (RIH и POOH) для каждого μ.
+    """
+    try:
+        data = request.get_json()
+        survey           = data['survey']
+        assembly         = data['assembly']
+        target_depth     = float(data['target_depth'])
+        fluid_density    = float(data['fluid_density'])
+        mu_intervals     = data.get('mu_intervals', [])
+        tortuosity       = float(data.get('tortuosity', 0.0))
+        centralizers     = data.get('centralizers', [])
+        use_stiff_string = bool(data.get('use_stiff_string', False))
+
+        validate_survey(survey)
+        validate_assembly(assembly)
+
+        mu_values = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35]
+        fan_rih, fan_pooh = [], []
+
+        for mu in mu_values:
+            f_rih, _ = johancsik_run(
+                assembly, survey, target_depth, fluid_density,
+                mu, mu_intervals, direction='down', initial_force=0.0,
+                tortuosity=tortuosity, centralizers=centralizers,
+                use_stiff_string=use_stiff_string)
+            f_pooh, _ = johancsik_run(
+                assembly, survey, target_depth, fluid_density,
+                mu, mu_intervals, direction='up', initial_force=0.0,
+                tortuosity=tortuosity, centralizers=centralizers,
+                use_stiff_string=use_stiff_string)
+            fan_rih.append({
+                'mu':     mu,
+                'forces': [{'depth': f['depth'], 'force': f['force']} for f in f_rih],
+            })
+            fan_pooh.append({
+                'mu':     mu,
+                'forces': [{'depth': f['depth'], 'force': f['force']} for f in f_pooh],
+            })
+
+        return jsonify(success=True, fan_rih=fan_rih, fan_pooh=fan_pooh)
+    except Exception as e:
+        return jsonify(success=False, error=str(e))
+
+
 @app.route('/api/survey/upload', methods=['POST'])
 def upload_survey():
     """Загрузка инклинометрии из CSV / Excel."""
