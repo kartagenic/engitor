@@ -2621,11 +2621,203 @@ async function buildTrajectory() {
 }
 
 function switchVizTab(tab) {
-    ['2d','plan','3d','dls'].forEach(t => {
+    ['2d','plan','3d','dls','td'].forEach(t => {
         document.getElementById(`viz-${t}`).style.display = t === tab ? '' : 'none';
         document.getElementById(`viz-btn-${t}`).classList.toggle('active', t === tab);
     });
-    if (_vizData) renderVizTab(tab);
+    if (_vizData && tab !== 'td') renderVizTab(tab);
+}
+
+// ── T&D Effective Tension envelope ──────────────────────────────────────
+
+const TD_OP_COLORS = {
+    free_hang:   '#8b8fa8',
+    rih:         '#3d5afe',
+    pooh:        '#ff6d00',
+    rot_off:     '#00bcd4',
+    rot_on:      '#00c853',
+    slide_drill: '#e040fb',
+};
+const TD_OP_NAMES_RU = {
+    free_hang:   'Свободное висение',
+    rih:         'Спуск (RIH)',
+    pooh:        'Подъём (POOH)',
+    rot_off:     'Вращение (без нагр.)',
+    rot_on:      'Вращение (с нагр.)',
+    slide_drill: 'Роторное бурение',
+};
+
+async function renderTdEnvelope() {
+    const status = document.getElementById('td-ops-status');
+    status.textContent = 'Расчёт…';
+
+    const ops = [...document.querySelectorAll('#viz-td input[type=checkbox]')]
+        .filter(cb => cb.checked).map(cb => cb.value);
+    if (!ops.length) { status.textContent = 'Выберите операции'; return; }
+
+    const baseReq = collectRequestData(state.targetDepth);
+    if (!baseReq.assembly || !baseReq.assembly.length) {
+        status.textContent = 'Нет данных компоновки'; return;
+    }
+
+    const wobRaw = parseFloat(document.getElementById('td-wob').value) || 0;
+    const wobKN  = toSI(wobRaw, 'force');  // kN (API expects kN, same as /torque_drag)
+
+    const req = {
+        ...baseReq,
+        wob: wobKN,
+        operations: ops,
+        use_stiff_string: false,
+    };
+
+    const res = await apiPost('/api/calculate/td_envelope', req);
+    if (!res || !res.success) {
+        status.textContent = 'Ошибка: ' + (res?.error || '?'); return;
+    }
+
+    // Build Plotly traces — X: tension (t), Y: depth (m) reversed
+    const traces = ops.filter(op => res.profiles[op]).map(op => {
+        const pts = res.profiles[op];
+        return {
+            x: pts.map(p => p.tension_t),
+            y: pts.map(p => p.depth),
+            name: TD_OP_NAMES_RU[op] || op,
+            mode: 'lines',
+            line: { color: TD_OP_COLORS[op] || '#888', width: 2.5 },
+            hovertemplate: '<b>%{fullData.name}</b><br>Глубина: %{y:.1f} м<br>Нагрузка: %{x:.2f} т<extra></extra>',
+        };
+    });
+
+    const layout = getPlotlyLayout({
+        xaxis: {
+            title: 'Эффективная нагрузка (т)',
+            side: 'top',
+            zeroline: true,
+            zerolinecolor: 'var(--border)',
+        },
+        yaxis: { title: 'Глубина MD (м)', autorange: 'reversed' },
+        legend: { orientation: 'v', x: 1.02, y: 1, xanchor: 'left' },
+        hovermode: 'closest',
+        margin: { l: 60, r: 10, t: 60, b: 30 },
+    });
+
+    _plot('viz-td-chart', traces, layout);
+
+    // Sync hover → schematic cursor
+    const chartDiv = document.getElementById('viz-td-chart');
+    chartDiv.removeAllListeners?.('plotly_hover');
+    chartDiv.on('plotly_hover', evt => {
+        if (evt.points && evt.points.length) {
+            updateSchematicCursor(evt.points[0].y);
+        }
+    });
+
+    renderSchematic(res.segments);
+    status.textContent = `${ops.length} операци${ops.length === 1 ? 'я' : ops.length < 5 ? 'и' : 'й'}`;
+}
+
+function renderSchematic(segments) {
+    const svgEl = document.getElementById('td-schematic-svg');
+    if (!svgEl) return;
+    // Get actual rendered size
+    const W = svgEl.getBoundingClientRect().width || svgEl.clientWidth || 170;
+    const H = svgEl.getBoundingClientRect().height || svgEl.clientHeight || 460;
+    svgEl.innerHTML = '';
+    svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+    if (!segments || !segments.length) return;
+
+    const maxDepth = Math.max(...segments.map(s => s.bottom));
+    const maxOD    = Math.max(...segments.map(s => s.od || 100));
+    const holeOD   = maxOD * 1.35;           // approximate open hole / casing OD
+    const margin   = { top: 22, bottom: 12, left: 30, right: 6 };
+    const cW = W - margin.left - margin.right;
+    const cH = H - margin.top - margin.bottom;
+    const xCtr  = margin.left + cW / 2;
+    const yOf   = d => margin.top + (d / maxDepth) * cH;
+    const xHalf = od => (od / holeOD) * (cW / 2) * 0.88;
+
+    const ns = 'http://www.w3.org/2000/svg';
+    const mk = (tag, attrs) => {
+        const el = document.createElementNS(ns, tag);
+        Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+        return el;
+    };
+
+    // Hole wall (full height rectangle)
+    const hHalf = xHalf(holeOD);
+    svgEl.appendChild(mk('rect', {
+        x: xCtr - hHalf, y: margin.top, width: hHalf * 2, height: cH,
+        fill: 'var(--bg-secondary)', stroke: 'var(--border)', 'stroke-width': '1',
+    }));
+
+    // Draw each assembly segment as a pipe column
+    const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+    const pipeFill   = dark ? 'rgba(61,90,254,0.15)' : 'rgba(61,90,254,0.10)';
+    const pipeStroke = '#3d5afe';
+
+    segments.forEach(seg => {
+        const y1 = yOf(seg.top);
+        const y2 = yOf(seg.bottom);
+        const hw = xHalf(seg.od || maxOD * 0.5);
+        const h  = Math.max(y2 - y1, 1);
+        svgEl.appendChild(mk('rect', {
+            x: xCtr - hw, y: y1, width: hw * 2, height: h,
+            fill: pipeFill, stroke: pipeStroke, 'stroke-width': '1',
+        }));
+    });
+
+    // Depth labels
+    const step = maxDepth > 2000 ? 500 : maxDepth > 800 ? 200 : 100;
+    const txtColor = dark ? '#4a4d65' : '#9298b8';
+    for (let d = 0; d <= maxDepth + step * 0.5; d += step) {
+        const y = yOf(Math.min(d, maxDepth));
+        const lbl = mk('text', {
+            x: margin.left - 3, y: y + 3.5,
+            'text-anchor': 'end', 'font-size': '9',
+            fill: txtColor, 'font-family': 'Inter,sans-serif',
+        });
+        lbl.textContent = d;
+        svgEl.appendChild(lbl);
+        svgEl.appendChild(mk('line', {
+            x1: margin.left - 1, x2: margin.left + 3, y1: y, y2: y,
+            stroke: 'var(--border)',
+        }));
+    }
+
+    // Component name labels (first + last segment)
+    const labelColor = dark ? '#8b8fa8' : '#4a506e';
+    [segments[0], segments[segments.length - 1]].filter(Boolean).forEach(seg => {
+        const y = yOf((seg.top + seg.bottom) / 2);
+        const lbl = mk('text', {
+            x: xCtr + xHalf(seg.od) + 4, y: y + 3,
+            'font-size': '8.5', fill: labelColor,
+            'font-family': 'Inter,sans-serif',
+        });
+        lbl.textContent = seg.name.length > 14 ? seg.name.substring(0, 14) + '…' : seg.name;
+        svgEl.appendChild(lbl);
+    });
+
+    // Cursor line (hidden initially)
+    const cursor = mk('line', {
+        id: 'td-schematic-cursor',
+        x1: margin.left, x2: W - margin.right, y1: margin.top, y2: margin.top,
+        stroke: 'var(--danger)', 'stroke-width': '1.5', 'stroke-dasharray': '4 2',
+    });
+    cursor.style.display = 'none';
+    svgEl.appendChild(cursor);
+
+    svgEl._state = { yOf, maxDepth };
+}
+
+function updateSchematicCursor(depth) {
+    const svgEl  = document.getElementById('td-schematic-svg');
+    const cursor = document.getElementById('td-schematic-cursor');
+    if (!cursor || !svgEl._state) return;
+    const y = svgEl._state.yOf(Math.min(depth, svgEl._state.maxDepth));
+    cursor.setAttribute('y1', y);
+    cursor.setAttribute('y2', y);
+    cursor.style.display = '';
 }
 
 function renderVizTab(tab) {

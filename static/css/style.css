@@ -319,6 +319,63 @@ body {
 .card-body { padding: 20px; }
 .card-body.no-pad { padding: 0; }
 
+/* ── T&D Envelope Sub-tab ── */
+.td-layout {
+    display: grid;
+    grid-template-columns: 200px 1fr 190px;
+    gap: 12px;
+    padding: 16px;
+    min-height: 540px;
+}
+.td-ops-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px 12px;
+    font-size: 13px;
+    overflow-y: auto;
+}
+.td-ops-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+.td-op-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    padding: 3px 0;
+    user-select: none;
+}
+.td-op-item input[type="checkbox"] { accent-color: var(--accent); flex-shrink: 0; }
+.td-ops-sep { border-top: 1px solid var(--border); margin: 8px 0; }
+.td-chart-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.td-schematic-panel {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px 10px;
+    overflow: hidden;
+}
+
 /* ── Mode Toggle ── */
 .mode-toggle {
     display: flex;

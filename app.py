@@ -1593,6 +1593,72 @@ def _make_chart_image(forces, title, ylabel='Осевая нагрузка (кН
     return buf
 
 
+@app.route('/api/calculate/td_envelope', methods=['POST'])
+def calculate_td_envelope():
+    """Расчёт огибающей эффективного натяжения для набора операций (Johancsik)."""
+    try:
+        data = request.get_json()
+        survey   = data['survey']
+        assembly = data['assembly']
+        td       = float(data['target_depth'])
+        rho      = float(data['fluid_density'])
+        mu       = float(data.get('mu_default', 0.3))
+        mu_int   = data.get('mu_intervals', [])
+        wob_kN   = float(data.get('wob', 0.0))        # kN (consistent with /torque_drag endpoint)
+        ops      = data.get('operations', ['free_hang', 'rih', 'pooh'])
+        use_stiff = bool(data.get('use_stiff_string', False))
+        cents    = data.get('centralizers', [])
+        tortuosity = float(data.get('tortuosity', 0.0))
+
+        validate_survey(survey)
+
+        OP_CONFIGS = {
+            'free_hang':   dict(direction='down', mu_eff=0.0, initial_force=0.0),
+            'rih':         dict(direction='down', mu_eff=mu,  initial_force=0.0),
+            'pooh':        dict(direction='up',   mu_eff=mu,  initial_force=0.0),
+            'rot_off':     dict(direction='down', mu_eff=0.0, initial_force=0.0),
+            'rot_on':      dict(direction='down', mu_eff=0.0, initial_force=-wob_kN),
+            'slide_drill': dict(direction='down', mu_eff=mu,  initial_force=-wob_kN),
+        }
+
+        profiles = {}
+        segments_out = None
+
+        for op_id in ops:
+            cfg = OP_CONFIGS.get(op_id)
+            if not cfg:
+                continue
+            forces, segs = johancsik_run(
+                assembly, survey, td, rho,
+                mu_default=cfg['mu_eff'],
+                mu_intervals=mu_int if cfg['mu_eff'] > 0 else [],
+                direction=cfg['direction'],
+                initial_force=cfg['initial_force'],
+                tortuosity=tortuosity,
+                centralizers=cents if cents else None,
+                use_stiff_string=use_stiff,
+            )
+            profiles[op_id] = [
+                {'depth': round(f['depth'], 1),
+                 'tension_t': round(f['force'] / 9.80665, 3)}
+                for f in forces
+            ]
+            if segments_out is None:
+                segments_out = [
+                    {'name': s['name'], 'top': round(s['top'], 1),
+                     'bottom': round(s['bottom'], 1), 'od': round(s['od'], 2),
+                     'incl_top': round(s['incl_top'], 2)}
+                    for s in segs
+                ]
+
+        return jsonify(success=True, profiles=profiles, segments=segments_out or [])
+
+    except (ValueError, KeyError) as e:
+        return jsonify(success=False, error=str(e))
+    except Exception as e:
+        return jsonify(success=False, error=f"Ошибка расчёта огибающей: {e}")
+
+
 @app.route('/api/calculate/trajectory', methods=['POST'])
 def calc_trajectory():
     """Минимальная кривизна — координаты скважины (TVD, N, E, горизонтальное расстояние)."""
