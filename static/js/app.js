@@ -3062,12 +3062,16 @@ function applyWellMetadata(meta) {
 // ════════════════════════════════════════════════════════════
 
 async function calcCementing() {
-    const td = toSI(parseFloat(document.getElementById('cem-target-depth')?.value) || 0, 'depth');
-    const lt = toSI(parseFloat(document.getElementById('cem-liner-top')?.value) || 0, 'depth');
+    // Keep raw display values for validation display; convert to SI for backend
+    const tdRaw = parseFloat(document.getElementById('cem-target-depth')?.value) || 0;
+    const ltRaw = parseFloat(document.getElementById('cem-liner-top')?.value) || 0;
+    const td = toSI(tdRaw, 'depth');   // SI metres
+    const lt = toSI(ltRaw, 'depth');   // SI metres
     if (!td || td <= 0) { showError('Укажите целевую глубину (башмак хвостовика)'); return; }
     if (!lt || lt <= 0 || lt >= td) { showError('Глубина верха хвостовика должна быть < целевой'); return; }
 
-    const data = collectRequestData(td);
+    // collectRequestData expects RAW display value — it calls toSI internally
+    const data = collectRequestData(tdRaw);
     if (data.survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
     if (!data.assembly.length)  { showError('Заполните компоновку'); return; }
 
@@ -3166,10 +3170,12 @@ async function calcCementing() {
 // ════════════════════════════════════════════════════════════
 
 async function calcFlotation() {
-    const td = toSI(parseFloat(document.getElementById('flot-target-depth')?.value) || 0, 'depth');
+    const tdRaw = parseFloat(document.getElementById('flot-target-depth')?.value) || 0;
+    const td = toSI(tdRaw, 'depth');   // SI metres
     if (!td || td <= 0) { showError('Укажите целевую глубину'); return; }
 
-    const data = collectRequestData(td);
+    // collectRequestData expects RAW display value
+    const data = collectRequestData(tdRaw);
     if (data.survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
     if (!data.assembly.length)  { showError('Заполните компоновку'); return; }
 
