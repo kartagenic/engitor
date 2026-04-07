@@ -322,7 +322,7 @@ body {
 /* ── T&D Envelope Sub-tab ── */
 .td-layout {
     display: grid;
-    grid-template-columns: 200px 1fr 190px;
+    grid-template-columns: 200px 1fr 215px;
     gap: 12px;
     padding: 16px;
     min-height: 540px;

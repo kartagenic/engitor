@@ -2727,93 +2727,233 @@ async function renderTdEnvelope() {
 function renderSchematic(segments) {
     const svgEl = document.getElementById('td-schematic-svg');
     if (!svgEl) return;
-    // Get actual rendered size
-    const W = svgEl.getBoundingClientRect().width || svgEl.clientWidth || 170;
-    const H = svgEl.getBoundingClientRect().height || svgEl.clientHeight || 460;
+
+    const W = Math.max(svgEl.getBoundingClientRect().width  || 190, 120);
+    const H = Math.max(svgEl.getBoundingClientRect().height || 500, 420);
     svgEl.innerHTML = '';
     svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svgEl.setAttribute('width',  W);
+    svgEl.setAttribute('height', H);
 
     if (!segments || !segments.length) return;
 
-    const maxDepth = Math.max(...segments.map(s => s.bottom));
-    const maxOD    = Math.max(...segments.map(s => s.od || 100));
-    const holeOD   = maxOD * 1.35;           // approximate open hole / casing OD
-    const margin   = { top: 22, bottom: 12, left: 30, right: 6 };
-    const cW = W - margin.left - margin.right;
-    const cH = H - margin.top - margin.bottom;
-    const xCtr  = margin.left + cW / 2;
-    const yOf   = d => margin.top + (d / maxDepth) * cH;
-    const xHalf = od => (od / holeOD) * (cW / 2) * 0.88;
+    const ns  = 'http://www.w3.org/2000/svg';
+    const dark = document.documentElement.getAttribute('data-theme') !== 'light';
 
-    const ns = 'http://www.w3.org/2000/svg';
-    const mk = (tag, attrs) => {
+    // ── Layout ────────────────────────────────────────────────────
+    const mL = 30, mR = 58, mT = 20, mB = 20;
+    const drawW = W - mL - mR;
+    const drawH = H - mT - mB;
+    const xCtr  = mL + drawW / 2;
+
+    const maxDepth = Math.max(...segments.map(s => s.bottom));
+    const maxOD    = Math.max(...segments.map(s => s.od || 100));   // mm
+    // Derived hole structure (typical offshore ratios)
+    const openHoleOD = maxOD * 2.20;
+    const casingOD   = maxOD * 1.75;
+    const casingID   = maxOD * 1.58;
+
+    const yOf    = d  => mT + Math.min(d / maxDepth, 1) * drawH;
+    const xHalf  = od => (od / openHoleOD) * (drawW / 2) * 0.92;
+
+    // Datum info
+    const isOffshore = document.getElementById('datum-type')?.value === 'offshore';
+    const airGap     = isOffshore ? (parseFloat(document.getElementById('datum-air-gap')?.value)   || 0) : 0;
+    const waterDepth = isOffshore ? (parseFloat(document.getElementById('datum-water-depth')?.value) || 0) : 0;
+    // Casing shoe (in display units → need SI)
+    const shoeRaw  = parseFloat(document.getElementById('shoe-casing')?.value) || 0;
+    const shoeSI   = shoeRaw > 0 ? toSI(shoeRaw, 'depth') : maxDepth * 0.85;
+
+    // ── SVG helpers ───────────────────────────────────────────────
+    const mk = (tag, attrs = {}) => {
         const el = document.createElementNS(ns, tag);
         Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+        svgEl.appendChild(el);
+        return el;
+    };
+    const mkIn = (parent, tag, attrs = {}) => {
+        const el = document.createElementNS(ns, tag);
+        Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+        parent.appendChild(el);
+        return el;
+    };
+    const mkText = (txt, x, y, attrs = {}) => {
+        const el = mk('text', { x, y, 'font-family': 'Inter,sans-serif', ...attrs });
+        el.textContent = txt;
         return el;
     };
 
-    // Hole wall (full height rectangle)
-    const hHalf = xHalf(holeOD);
-    svgEl.appendChild(mk('rect', {
-        x: xCtr - hHalf, y: margin.top, width: hHalf * 2, height: cH,
-        fill: 'var(--bg-secondary)', stroke: 'var(--border)', 'stroke-width': '1',
-    }));
+    // ── Defs: gradients ───────────────────────────────────────────
+    const defs = mk('defs');
 
-    // Draw each assembly segment as a pipe column
-    const dark = document.documentElement.getAttribute('data-theme') !== 'light';
-    const pipeFill   = dark ? 'rgba(61,90,254,0.15)' : 'rgba(61,90,254,0.10)';
-    const pipeStroke = '#3d5afe';
+    // Formation gradient (horizontal tan → dark-edge)
+    const gFm = mkIn(defs, 'linearGradient', { id:'sch-fm', x1:'0%', y1:'0%', x2:'100%', y2:'0%' });
+    [['0%','#9a7040'],['12%','#7a5020'],['50%','#c8a060'],['88%','#7a5020'],['100%','#9a7040']].forEach(([o,c]) => mkIn(gFm,'stop',{offset:o,'stop-color':c}));
+
+    // Hole interior (black void)
+    const gHole = mkIn(defs, 'linearGradient', { id:'sch-hole', x1:'0%', y1:'0%', x2:'100%', y2:'0%' });
+    [['0%','#5a3a10'],['8%','#0d0801'],['50%','#050301'],['92%','#0d0801'],['100%','#5a3a10']].forEach(([o,c]) => mkIn(gHole,'stop',{offset:o,'stop-color':c}));
+
+    // Casing wall metallic (horizontal)
+    const gCsg = mkIn(defs, 'linearGradient', { id:'sch-csg', x1:'0%', y1:'0%', x2:'100%', y2:'0%' });
+    [['0%','#3a3a3a'],['20%','#9a9a9a'],['45%','#d8d8d8'],['55%','#d8d8d8'],['80%','#9a9a9a'],['100%','#3a3a3a']].forEach(([o,c]) => mkIn(gCsg,'stop',{offset:o,'stop-color':c}));
+
+    // Pipe metallic (silver, lighter than casing)
+    const gPipe = mkIn(defs, 'linearGradient', { id:'sch-pipe', x1:'0%', y1:'0%', x2:'100%', y2:'0%' });
+    [['0%','#555'],['18%','#bbb'],['40%','#f0f0f0'],['60%','#f0f0f0'],['82%','#bbb'],['100%','#555']].forEach(([o,c]) => mkIn(gPipe,'stop',{offset:o,'stop-color':c}));
+
+    // Packer red
+    const gPk = mkIn(defs, 'linearGradient', { id:'sch-packer', x1:'0%', y1:'0%', x2:'100%', y2:'0%' });
+    [['0%','#5a0000'],['25%','#b81010'],['50%','#e83030'],['75%','#b81010'],['100%','#5a0000']].forEach(([o,c]) => mkIn(gPk,'stop',{offset:o,'stop-color':c}));
+
+    // ── Formation background (full SVG area) ──────────────────────
+    mk('rect', { x:0, y:mT, width:W, height:drawH, fill:'url(#sch-fm)' });
+
+    // ── Sea / water layer ─────────────────────────────────────────
+    if (isOffshore && waterDepth > 0) {
+        const yMud = yOf(waterDepth);
+        mk('rect', { x:0, y:mT, width:W, height:Math.max(yMud - mT, 1),
+            fill:'#3a7ab8', opacity:'0.50' });
+        mk('line', { x1:0, x2:W, y1:mT, y2:mT, stroke:'#87ceeb', 'stroke-width':'1.5' });
+        mkText('MSL', mL + 2, mT + 9, { 'font-size':'7.5', fill:'#a0d8f0' });
+        mk('line', { x1:0, x2:W, y1:yMud, y2:yMud, stroke:'#8B6914', 'stroke-width':'0.8', 'stroke-dasharray':'3 2' });
+        mkText('Mudline', mL + 2, yMud - 2, { 'font-size':'7', fill:'#b8946a' });
+    }
+
+    // ── Jagged open-hole edges ────────────────────────────────────
+    const hHalf = xHalf(openHoleOD);
+    // Build left and right jagged walls using seeded "noise"
+    const nPts = Math.max(12, Math.floor(drawH / 9));
+    const lPts = [], rPts = [];
+    for (let i = 0; i <= nPts; i++) {
+        const y = mT + (i / nPts) * drawH;
+        const jL = (Math.sin(i * 1.9 + 0.7) * 0.55 + Math.cos(i * 3.3 + 1.1) * 0.28) * hHalf * 0.13;
+        const jR = (Math.sin(i * 2.3 + 1.4) * 0.50 + Math.cos(i * 4.1 + 0.3) * 0.25) * hHalf * 0.13;
+        lPts.push({ x: xCtr - hHalf + jL, y });
+        rPts.push({ x: xCtr + hHalf + jR, y });
+    }
+    // Closed hole interior path (formation cutout)
+    let holePd = `M ${lPts[0].x} ${lPts[0].y}`;
+    lPts.forEach(p => { holePd += ` L ${p.x.toFixed(1)} ${p.y.toFixed(1)}`; });
+    holePd += ` L ${rPts[rPts.length-1].x.toFixed(1)} ${rPts[rPts.length-1].y.toFixed(1)}`;
+    rPts.slice().reverse().forEach(p => { holePd += ` L ${p.x.toFixed(1)} ${p.y.toFixed(1)}`; });
+    holePd += ' Z';
+    mk('path', { d: holePd, fill: 'url(#sch-hole)' });
+
+    // ── Casing (down to shoe depth) ───────────────────────────────
+    const yCsgBot  = yOf(Math.min(shoeSI, maxDepth));
+    const cHalf    = xHalf(casingOD);
+    const cIHalf   = xHalf(casingID);
+    // Left casing wall
+    mk('rect', { x: xCtr - cHalf, y: mT, width: cHalf - cIHalf, height: yCsgBot - mT, fill: 'url(#sch-csg)' });
+    // Right casing wall
+    mk('rect', { x: xCtr + cIHalf, y: mT, width: cHalf - cIHalf, height: yCsgBot - mT, fill: 'url(#sch-csg)' });
+    // Casing shoe cap
+    mk('rect', { x: xCtr - cHalf - 2, y: yCsgBot - 3, width: (cHalf + 2) * 2, height: 5, fill:'#888', rx:'1' });
+    // Casing joint marks
+    const jSpacePx = 44;
+    for (let jy = mT + jSpacePx; jy < yCsgBot - 10; jy += jSpacePx) {
+        mk('rect', { x: xCtr - cHalf - 2, y: jy - 2, width: (cHalf + 2) * 2, height: 4, fill:'#707070', rx:'1' });
+    }
+
+    // ── Assembly pipe segments ────────────────────────────────────
+    const PACKER_KW = ['packer', 'пакер', 'pack'];
 
     segments.forEach(seg => {
         const y1 = yOf(seg.top);
         const y2 = yOf(seg.bottom);
-        const hw = xHalf(seg.od || maxOD * 0.5);
-        const h  = Math.max(y2 - y1, 1);
-        svgEl.appendChild(mk('rect', {
-            x: xCtr - hw, y: y1, width: hw * 2, height: h,
-            fill: pipeFill, stroke: pipeStroke, 'stroke-width': '1',
-        }));
+        const h  = Math.max(y2 - y1, 2);
+        const pH = xHalf(seg.od || maxOD);
+        const isPacker = PACKER_KW.some(k => seg.name.toLowerCase().includes(k));
+
+        if (isPacker) {
+            // Wider packer body
+            const pkH = Math.max(pH * 1.2, xHalf(maxOD * 0.90));
+            mk('rect', { x: xCtr - pkH, y: y1, width: pkH * 2, height: h,
+                fill: 'url(#sch-packer)', rx:'2' });
+            // Top/bottom caps
+            mk('rect', { x: xCtr - pH * 0.75, y: y1 - 3, width: pH * 0.75 * 2, height: 5, fill:'#111', rx:'1' });
+            mk('rect', { x: xCtr - pH * 0.75, y: y2 - 2, width: pH * 0.75 * 2, height: 5, fill:'#111', rx:'1' });
+            // Black seal rings
+            [0.25, 0.50, 0.75].forEach(f => {
+                mk('rect', { x: xCtr - pkH + 1, y: y1 + h * f - 3, width: (pkH - 1) * 2, height: 5, fill:'#1a0000' });
+            });
+            // Bore through packer
+            const bH = pH * 0.45;
+            mk('rect', { x: xCtr - bH, y: y1, width: bH * 2, height: h, fill:'#0c0c0c' });
+        } else {
+            // Pipe outer wall
+            mk('rect', { x: xCtr - pH, y: y1, width: pH * 2, height: h,
+                fill: 'url(#sch-pipe)' });
+            // Pipe bore (inner dark cylinder)
+            const bH = pH * 0.52;
+            mk('rect', { x: xCtr - bH, y: y1, width: bH * 2, height: h, fill:'#111' });
+            // Tool joint rings every ~40px
+            const jSp = Math.max(36, Math.min(60, h * 0.18));
+            for (let jy = y1 + jSp * 0.6; jy < y2 - 8; jy += jSp) {
+                mk('rect', { x: xCtr - pH - 3, y: jy - 3, width: (pH + 3) * 2, height: 5,
+                    fill:'#aaa', rx:'1' });
+            }
+        }
     });
 
-    // Depth labels
-    const step = maxDepth > 2000 ? 500 : maxDepth > 800 ? 200 : 100;
-    const txtColor = dark ? '#4a4d65' : '#9298b8';
-    for (let d = 0; d <= maxDepth + step * 0.5; d += step) {
+    // ── Depth labels (left axis) ──────────────────────────────────
+    const txtMut  = dark ? '#5a5e7a' : '#9298b8';
+    const txtMain = dark ? '#8b8fa8' : '#4a506e';
+    const depStep = maxDepth > 2000 ? 500 : maxDepth > 800 ? 200 : 100;
+    for (let d = 0; d <= maxDepth + depStep * 0.4; d += depStep) {
         const y = yOf(Math.min(d, maxDepth));
-        const lbl = mk('text', {
-            x: margin.left - 3, y: y + 3.5,
-            'text-anchor': 'end', 'font-size': '9',
-            fill: txtColor, 'font-family': 'Inter,sans-serif',
-        });
-        lbl.textContent = d;
-        svgEl.appendChild(lbl);
-        svgEl.appendChild(mk('line', {
-            x1: margin.left - 1, x2: margin.left + 3, y1: y, y2: y,
-            stroke: 'var(--border)',
-        }));
+        mk('line', { x1: mL - 4, x2: mL + 1, y1: y, y2: y, stroke: txtMut, 'stroke-width':'0.8' });
+        mkText(d, mL - 5, y + 3.5, { 'text-anchor':'end', 'font-size':'8', fill: txtMut });
     }
+    // Bottom depth
+    mkText(`${maxDepth.toFixed(0)} м`, mL, H - 5,
+        { 'font-size':'8', fill: txtMut });
 
-    // Component name labels (first + last segment)
-    const labelColor = dark ? '#8b8fa8' : '#4a506e';
-    [segments[0], segments[segments.length - 1]].filter(Boolean).forEach(seg => {
-        const y = yOf((seg.top + seg.bottom) / 2);
-        const lbl = mk('text', {
-            x: xCtr + xHalf(seg.od) + 4, y: y + 3,
-            'font-size': '8.5', fill: labelColor,
-            'font-family': 'Inter,sans-serif',
-        });
-        lbl.textContent = seg.name.length > 14 ? seg.name.substring(0, 14) + '…' : seg.name;
-        svgEl.appendChild(lbl);
+    // ── Component labels (right side) ─────────────────────────────
+    // Decide which segments to label (top, packer, bottom — avoid crowding)
+    const toLbl = [];
+    toLbl.push(segments[0]);
+    segments.forEach(s => { if (PACKER_KW.some(k => s.name.toLowerCase().includes(k))) toLbl.push(s); });
+    if (segments.length > 1 && !toLbl.includes(segments[segments.length-1]))
+        toLbl.push(segments[segments.length-1]);
+
+    const xLblStart = xCtr + hHalf + 6;
+    const usedY = [];
+    toLbl.forEach(seg => {
+        const yMid   = yOf((seg.top + seg.bottom) / 2);
+        // Avoid overlapping labels: nudge if needed
+        let yLbl = yMid;
+        usedY.forEach(uy => { if (Math.abs(yLbl - uy) < 22) yLbl = uy + 22; });
+        usedY.push(yLbl);
+
+        // Leader line from pipe edge to text
+        mk('line', { x1: xCtr + xHalf(seg.od) + 2, x2: xLblStart - 1,
+            y1: yMid, y2: yLbl + 1, stroke: txtMut, 'stroke-width':'0.7' });
+        // Name
+        mkText(seg.name.length > 13 ? seg.name.substring(0,13) + '…' : seg.name,
+            xLblStart, yLbl, { 'font-size':'8', fill: txtMain, 'font-weight':'600' });
+        // OD
+        mkText(`OD ${seg.od} mm`, xLblStart, yLbl + 9,
+            { 'font-size':'7.5', fill: txtMut });
     });
 
-    // Cursor line (hidden initially)
+    // ── Open hole annotation (left side) ─────────────────────────
+    const yOH = yOf(maxDepth * 0.55);
+    mk('line', { x1: lPts[Math.floor(nPts*0.55)].x - 2, x2: mL - 2,
+        y1: yOH, y2: yOH, stroke: txtMut, 'stroke-width':'0.7' });
+    mkText('Open Hole', mL - 3, yOH - 3,
+        { 'text-anchor':'end', 'font-size':'7.5', fill: txtMut });
+    mkText(`${(openHoleOD).toFixed(0)} mm`, mL - 3, yOH + 6,
+        { 'text-anchor':'end', 'font-size':'7', fill: txtMut });
+
+    // ── Depth cursor ──────────────────────────────────────────────
     const cursor = mk('line', {
         id: 'td-schematic-cursor',
-        x1: margin.left, x2: W - margin.right, y1: margin.top, y2: margin.top,
-        stroke: 'var(--danger)', 'stroke-width': '1.5', 'stroke-dasharray': '4 2',
+        x1: mL, x2: W - mR + 4, y1: mT, y2: mT,
+        stroke: '#ff1744', 'stroke-width':'1.5', 'stroke-dasharray':'5 3',
     });
     cursor.style.display = 'none';
-    svgEl.appendChild(cursor);
 
     svgEl._state = { yOf, maxDepth };
 }
