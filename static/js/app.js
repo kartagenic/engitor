@@ -193,7 +193,8 @@ function getProjectData() {
         assembly.push({
             name,
             len: nums[0]?.value, weight: nums[1]?.value,
-            od: nums[2]?.value, linwt: nums[3]?.value, maxLoad: nums[4]?.value,
+            od: nums[2]?.value, id_mm: nums[3]?.value,
+            linwt: nums[4]?.value, maxLoad: nums[5]?.value,
             grade, conn,
         });
     });
@@ -314,7 +315,7 @@ function applyProjectData(data) {
     // Assembly
     document.getElementById('assembly-tbody').innerHTML = '';
     (data.assembly || []).forEach(a => {
-        makeAssemblyRow(a.name, a.len, a.weight, a.od, a.maxLoad, a.linwt, a.grade, a.conn);
+        makeAssemblyRow(a.name, a.len, a.weight, a.od, a.maxLoad, a.linwt, a.grade, a.conn, a.id_mm);
     });
     updateAssemblySummary();
 
@@ -1248,7 +1249,7 @@ function autoCalcMaxLoad(tr) {
     updateAssemblySummary();
 }
 
-function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit, grade, conn) {
+function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit, grade, conn, id_mm) {
     const tbody = document.getElementById('assembly-tbody');
     const idx = tbody.rows.length + 1;
     const gradeVal = grade ?? '';
@@ -1259,7 +1260,8 @@ function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit, grade, conn)
         <td><input type="text" value="${name ?? ''}" placeholder="Элемент"></td>
         <td><input type="number" step="any" value="${len ?? ''}" placeholder="0"></td>
         <td><input type="number" step="any" value="${weight ?? ''}" placeholder="0"></td>
-        <td><input type="number" step="any" value="${od ?? ''}" placeholder="0"></td>
+        <td><input type="number" step="any" value="${od ?? ''}" placeholder="0" class="od-inp"></td>
+        <td><input type="number" step="any" value="${id_mm ?? ''}" placeholder="авто" title="Внутренний диаметр трубы (мм)" class="id-inp"></td>
         <td><input type="number" step="any" value="${wtPerUnit ?? ''}" placeholder="0"></td>
         <td style="min-width:120px">
             <select class="form-input grade-sel" style="padding:3px 4px;font-size:11px;width:100%">
@@ -1318,7 +1320,7 @@ function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit, grade, conn)
     if (gradeVal && connVal && od && wtPerUnit) recalcMax();
 }
 
-function addAssemblyRow() { makeAssemblyRow('', '', '', '', '', '', '', 'BTC'); }
+function addAssemblyRow() { makeAssemblyRow('', '', '', '', '', '', '', 'BTC', ''); }
 
 function removeAssemblyRow() {
     const tbody = document.getElementById('assembly-tbody');
@@ -1351,8 +1353,9 @@ function getAssemblyData() {
         const lenRaw  = parseFloat(numInputs[0]?.value);
         const weightRaw = parseFloat(numInputs[1]?.value);
         const odRaw   = parseFloat(numInputs[2]?.value) || 0;
-        const wtPuRaw = parseFloat(numInputs[3]?.value) || 0;
-        let maxLoadRaw = parseFloat(numInputs[4]?.value);
+        const idRaw   = parseFloat(numInputs[3]?.value) || 0;   // NEW: inner diameter
+        const wtPuRaw = parseFloat(numInputs[4]?.value) || 0;
+        let maxLoadRaw = parseFloat(numInputs[5]?.value);
         const grade   = gradeEl?.value || '';
         const conn    = connEl?.value  || 'BTC';
 
@@ -1365,6 +1368,10 @@ function getAssemblyData() {
         // Convert to SI
         const len     = isNaN(lenRaw)     ? NaN : toSI(lenRaw, 'depth');
         const od      = toSI(odRaw, 'od');
+        // ID: use entered value, or estimate as OD - 2×wall_thickness
+        // wall_thickness ≈ linwt/(π × OD × ρ_steel) — simplified: id ≈ 0.80×OD for drill pipe
+        const id_raw_si = idRaw > 0 ? toSI(idRaw, 'od')
+                        : (odRaw > 0 ? toSI(odRaw * 0.80, 'od') : 0.08);
         const wtPu    = toSI(wtPuRaw, 'linwt');
         const maxLoad = isNaN(maxLoadRaw) ? NaN : toSI(maxLoadRaw, 'force');
 
@@ -1379,7 +1386,7 @@ function getAssemblyData() {
 
         if (!isNaN(len) && !isNaN(weight) && !isNaN(maxLoad)) {
             assembly.push({ name, length: len, weight_air: weight, od,
-                            max_load: maxLoad, linwt: wtPu, grade });
+                            id: id_raw_si, max_load: maxLoad, linwt: wtPu, grade });
         }
     }
     return assembly;
@@ -1485,6 +1492,7 @@ function collectRequestData(targetDepth) {
         mu_default: parseFloat(document.getElementById('mu-openhole').value) || 0.25,
         mu_intervals: getMuIntervals(),
         tortuosity: parseFloat(document.getElementById('mu-tortuosity')?.value) || 0,
+        mu_torque: (() => { const v = parseFloat(document.getElementById('mu-torque-coeff')?.value); return isNaN(v) ? null : v; })(),
         centralizers: getCentralizerData(),
         datum: {
             type: document.getElementById('datum-type')?.value || 'onshore',
@@ -3767,4 +3775,235 @@ function drawBhaSchematic(segs) {
 
 function escSvg(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ГИДРАВЛИКА / ECD
+// ══════════════════════════════════════════════════════════════
+
+function toggleHydRheoFields() {
+    const model = document.getElementById('hyd-rheo-model')?.value;
+    const isBingham = !model || model === 'bingham';
+    document.getElementById('hyd-bingham-fields').style.display = isBingham ? '' : 'none';
+    document.getElementById('hyd-pl-fields').style.display      = isBingham ? 'none' : '';
+}
+
+function addWellboreRow(top, bottom, diam) {
+    const tbody = document.getElementById('wellbore-tbody');
+    if (!tbody) return;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+        <td><input type="number" class="form-input" style="width:100%;padding:3px" value="${top ?? ''}" step="10" placeholder="0"></td>
+        <td><input type="number" class="form-input" style="width:100%;padding:3px" value="${bottom ?? ''}" step="10" placeholder="0"></td>
+        <td><input type="number" class="form-input" style="width:100%;padding:3px" value="${diam ?? ''}" step="1" placeholder="мм"></td>
+        <td><button class="btn-row-delete" onclick="this.closest('tr').remove()">&times;</button></td>
+    `;
+    tbody.appendChild(tr);
+}
+
+function getWellboreData() {
+    const rows = document.getElementById('wellbore-tbody')?.rows || [];
+    const wb = [];
+    for (const row of rows) {
+        const ins = row.querySelectorAll('input[type="number"]');
+        const top = parseFloat(ins[0]?.value);
+        const bot = parseFloat(ins[1]?.value);
+        const d_mm = parseFloat(ins[2]?.value);
+        if (!isNaN(top) && !isNaN(bot) && !isNaN(d_mm) && d_mm > 0) {
+            wb.push({ top, bottom: bot, d_m: d_mm / 1000.0 });
+        }
+    }
+    return wb;
+}
+
+async function calcHydraulics() {
+    const model   = document.getElementById('hyd-rheo-model')?.value || 'bingham';
+    const isBing  = model === 'bingham';
+    const Q       = parseFloat(document.getElementById('hyd-flow-rate')?.value);
+    const pv      = parseFloat(document.getElementById('hyd-pv')?.value) || 20;
+    const yp      = parseFloat(document.getElementById('hyd-yp')?.value) || 5;
+    const n_pl    = parseFloat(document.getElementById('hyd-n')?.value)  || 0.7;
+    const K_pl    = parseFloat(document.getElementById('hyd-K')?.value)  || 0.5;
+    const tdEl    = isBing ? 'hyd-target-depth' : 'hyd-target-depth-pl';
+    const td      = parseFloat(document.getElementById(tdEl)?.value)
+                 || parseFloat(document.getElementById('td-target-depth')?.value) || 0;
+    const nozzTxt = document.getElementById('hyd-nozzles')?.value || '12,12,12';
+    const nozzles = nozzTxt.split(',').map(s => parseInt(s.trim())).filter(n => n > 0);
+    const wellbore = getWellboreData();
+    const fluid_density = toSI(parseFloat(document.getElementById('fluid-density')?.value) || 1.2, 'dens');
+
+    if (!Q || Q <= 0)  { showError('Укажите расход'); return; }
+    if (!td || td <= 0){ showError('Укажите целевую глубину'); return; }
+
+    const spinner = document.getElementById('hyd-spinner');
+    const resDiv  = document.getElementById('hyd-results');
+    spinner.style.display = '';
+    resDiv.style.display  = 'none';
+
+    try {
+        const res = await apiPost('/api/calculate/hydraulics', {
+            assembly:       getAssemblyData(),
+            survey:         getSurveyData(),
+            target_depth:   toSI(td, 'depth'),
+            fluid_density,
+            flow_rate:      Q,
+            rheology_model: model,
+            pv, yp, n_pl, K_pl,
+            nozzles,
+            wellbore,
+        });
+        if (!res.success) { showError(res.error); return; }
+
+        resDiv.style.display = '';
+
+        // KPI
+        document.getElementById('hyd-kpi').innerHTML = `
+            <div class="stat-card"><div class="stat-label">SPP (давление на стояке)</div>
+              <div class="stat-value">${res.spp_kPa}<span class="stat-unit">кПа</span></div></div>
+            <div class="stat-card"><div class="stat-label">ΔP труба</div>
+              <div class="stat-value">${res.dp_pipe_kPa}<span class="stat-unit">кПа</span></div></div>
+            <div class="stat-card"><div class="stat-label">ΔP долото</div>
+              <div class="stat-value">${res.dp_bit_kPa}<span class="stat-unit">кПа</span></div></div>
+            <div class="stat-card"><div class="stat-label">ΔP КП (кольц.)</div>
+              <div class="stat-value">${res.dp_ann_kPa}<span class="stat-unit">кПа</span></div></div>
+            <div class="stat-card"><div class="stat-label">ECD на забое</div>
+              <div class="stat-value">${res.ecd_td}<span class="stat-unit">г/см³</span></div></div>
+            <div class="stat-card"><div class="stat-label">Скорость в форсунке</div>
+              <div class="stat-value">${res.v_nozzle}<span class="stat-unit">м/с</span></div></div>`;
+
+        // ECD chart
+        const ecdD = res.ecd_profile.map(p => p.depth);
+        const ecdV = res.ecd_profile.map(p => p.ecd);
+        _plot('hyd-ecd-chart', [
+            { x: ecdV, y: ecdD, type: 'scatter', mode: 'lines',
+              line: { color: '#3d5afe', width: 2.5 }, name: 'ECD',
+              fill: 'tozerox', fillcolor: 'rgba(61,90,254,0.06)' },
+            { x: Array(ecdD.length).fill(fluid_density), y: ecdD,
+              type: 'scatter', mode: 'lines',
+              line: { color: '#ff1744', width: 1.5, dash: 'dash' }, name: 'ρ_mud (стат.)',
+              hoverinfo: 'skip' },
+        ], {
+            xaxis: { title: 'ECD (г/см³)', range: [fluid_density * 0.95, Math.max(...ecdV) * 1.05] },
+            yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
+            height: 320,
+        });
+
+        // ΔP breakdown bar
+        const secNames = res.pipe_sections.map(s => `Труба ${s.top}–${s.bottom}м`);
+        const dpBar    = res.pipe_sections.map(s => s.dp_kPa);
+        const annNames = res.ann_sections.map(s => `КП ${s.top}–${s.bottom}м`);
+        const dpAnn    = res.ann_sections.map(s => s.dp_kPa);
+        _plot('hyd-dp-chart', [
+            { x: dpBar, y: secNames, type: 'bar', orientation: 'h', name: 'Труба',
+              marker: { color: 'rgba(61,90,254,0.7)' } },
+            { x: dpAnn, y: annNames, type: 'bar', orientation: 'h', name: 'КП',
+              marker: { color: 'rgba(0,200,83,0.7)' } },
+        ], {
+            barmode: 'group',
+            xaxis: { title: 'ΔP (кПа)' },
+            yaxis: { autorange: 'reversed', automargin: true },
+            height: Math.max(260, (secNames.length + annNames.length) * 22 + 80),
+            margin: { l: 160, r: 20, t: 30, b: 50 },
+        });
+
+        // Section table
+        const tbody = document.getElementById('hyd-section-tbody');
+        tbody.innerHTML = '';
+        const allSecs = [
+            ...res.pipe_sections.map(s => ({ ...s, kind: 'Труба (внутри)' })),
+            ...res.ann_sections.map(s => ({ ...s, kind: 'КП (кольц.)' })),
+        ];
+        allSecs.forEach(s => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${s.kind}</td><td>${s.kind.startsWith('КП') ? 'Кольцевое' : 'Трубное'}</td>
+                <td>${s.top}</td><td>${s.bottom}</td><td>${s.dp_kPa}</td>
+                <td>${s.v_ms}</td>
+                <td><span class="badge ${s.regime === 'turbulent' ? 'badge-warn' : 'badge-ok'}">${s.regime === 'turbulent' ? 'Турб.' : 'Лам.'}</span></td>
+                <td>${s.Re}</td>`;
+            tbody.appendChild(tr);
+        });
+
+    } catch(e) {
+        showError('Ошибка гидравлики: ' + e.message);
+    } finally {
+        spinner.style.display = 'none';
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  СВЭБ И СЁРЖ
+// ══════════════════════════════════════════════════════════════
+
+async function calcSwabSurge() {
+    const speed = parseFloat(document.getElementById('ss-speed')?.value) || 0.5;
+    const open  = document.getElementById('ss-open-pipe')?.value !== 'false';
+    const td    = parseFloat(document.getElementById('ss-target-depth')?.value)
+               || parseFloat(document.getElementById('td-target-depth')?.value) || 0;
+    const fluid_density = toSI(parseFloat(document.getElementById('fluid-density')?.value) || 1.2, 'dens');
+    const pv  = parseFloat(document.getElementById('hyd-pv')?.value)  || 20;
+    const yp  = parseFloat(document.getElementById('hyd-yp')?.value)  || 5;
+    const model = document.getElementById('hyd-rheo-model')?.value || 'bingham';
+
+    if (!td || td <= 0) { showError('Укажите целевую глубину (Свэб/Сёрж)'); return; }
+
+    const spinner = document.getElementById('ss-spinner');
+    const resDiv  = document.getElementById('ss-results');
+    spinner.style.display = '';
+    resDiv.style.display  = 'none';
+
+    try {
+        const res = await apiPost('/api/calculate/swab_surge', {
+            assembly:       getAssemblyData(),
+            survey:         getSurveyData(),
+            target_depth:   toSI(td, 'depth'),
+            fluid_density,
+            pv, yp,
+            rheology_model: model,
+            pipe_speed:     speed,
+            open_pipe:      open,
+            wellbore:       getWellboreData(),
+        });
+        if (!res.success) { showError(res.error); return; }
+
+        resDiv.style.display = '';
+
+        // KPI
+        const surgeWarn = res.emw_surge > (fluid_density + 0.03) ? 'style="color:#ff5252"' : '';
+        const swabWarn  = res.emw_swab  < (fluid_density - 0.05) ? 'style="color:#ff5252"' : '';
+        document.getElementById('ss-kpi').innerHTML = `
+            <div class="stat-card"><div class="stat-label">Давление Сёрж (забой)</div>
+              <div class="stat-value">+${res.dp_surge_kPa}<span class="stat-unit">кПа</span></div></div>
+            <div class="stat-card"><div class="stat-label">Давление Свэб (забой)</div>
+              <div class="stat-value">${res.dp_swab_kPa}<span class="stat-unit">кПа</span></div></div>
+            <div class="stat-card"><div class="stat-label">EMW Сёрж</div>
+              <div class="stat-value" ${surgeWarn}>${res.emw_surge}<span class="stat-unit">г/см³</span></div></div>
+            <div class="stat-card"><div class="stat-label">EMW Свэб</div>
+              <div class="stat-value" ${swabWarn}>${res.emw_swab}<span class="stat-unit">г/см³</span></div></div>`;
+
+        // Chart
+        const depths = res.surge_profile.map(p => p.depth);
+        const surge  = res.surge_profile.map(p => p.dp_kPa);
+        const swab   = res.swab_profile.map(p => p.dp_kPa);
+        _plot('ss-chart', [
+            { x: surge, y: depths, type: 'scatter', mode: 'lines+markers',
+              line: { color: '#ff5252', width: 2.5 }, name: 'Сёрж (+кПа)',
+              fill: 'tozerox', fillcolor: 'rgba(255,82,82,0.07)' },
+            { x: swab,  y: depths, type: 'scatter', mode: 'lines+markers',
+              line: { color: '#40c4ff', width: 2.5 }, name: 'Свэб (−кПа)',
+              fill: 'tozerox', fillcolor: 'rgba(64,196,255,0.07)' },
+            { x: [0, 0], y: [0, Math.max(...depths)],
+              type: 'scatter', mode: 'lines',
+              line: { color: '#4a4d65', width: 1, dash: 'dash' },
+              name: '0', showlegend: false },
+        ], {
+            xaxis: { title: 'ΔP (кПа)', zeroline: true },
+            yaxis: { autorange: 'reversed', title: 'Глубина (м)' },
+            height: 320,
+        });
+
+    } catch(e) {
+        showError('Ошибка Свэб/Сёрж: ' + e.message);
+    } finally {
+        spinner.style.display = 'none';
+    }
 }

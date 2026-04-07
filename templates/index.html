@@ -385,6 +385,20 @@
                                 <input type="number" class="form-input" id="mu-tortuosity"
                                        value="0" step="0.001" min="0" max="0.05" placeholder="0">
                             </div>
+                            <div class="form-group">
+                                <label class="form-label" title="SPE-105068: μ для крутящего момента (обычно ≠ μ для осевых нагрузок). Оставьте пустым — будет равен μ₁. Типовое отношение: μ_torque ≈ 0.8 × μ_drag">
+                                    μ₄ Крутящий момент (μ_torque)
+                                    <button class="help-btn" onclick="toggleHelp('help-mu-torque')" title="Пояснение">ℹ</button>
+                                </label>
+                                <input type="number" class="form-input" id="mu-torque-coeff"
+                                       step="0.01" min="0.05" max="0.8" placeholder="= μ₁ (по умолч.)">
+                            </div>
+                        </div>
+                        <div class="help-panel" id="help-mu-torque">
+                            <strong>SPE-105068 (Mitchell &amp; Samuel, 2009)</strong>: полевые данные показывают, что μ,
+                            которое совпадает с измеренным крутящим моментом, <em>не совпадает</em> с μ для осевых нагрузок (drag).
+                            Типовое соотношение: μ_torque ≈ 0.7–0.9 × μ_drag.
+                            Если поле пустое — для момента используется то же значение, что для drag.
                         </div>
                         <div class="help-panel" id="help-tort">
                             <strong>Извилистость ствола (Survey Tortuosity)</strong> — эмпирический поправочный коэффициент,
@@ -472,6 +486,7 @@
                                         <th>Длина (<span class="unit-lbl" data-unit="depth">м</span>)</th>
                                         <th>Вес (<span class="unit-lbl" data-unit="weight">кг</span>)</th>
                                         <th>OD (<span class="unit-lbl" data-unit="od">мм</span>)</th>
+                                        <th title="Внутренний диаметр — обязателен для гидравлики">ID (<span class="unit-lbl" data-unit="od">мм</span>)</th>
                                         <th>Лин. вес (<span class="unit-lbl" data-unit="linwt">кг/м</span>)</th>
                                         <th style="min-width:120px">Марка стали</th>
                                         <th style="min-width:80px">Резьба</th>
@@ -1020,6 +1035,166 @@
                             <div id="flot-results" style="display:none;margin-top:20px">
                                 <div class="stats-row" id="flot-kpi"></div>
                                 <div class="chart-container" id="flot-chart" style="min-height:300px;margin-top:16px"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- РАСЧЁТ 8 — ГИДРАВЛИКА / ECD -->
+                    <div class="accordion-item">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div style="display:flex;align-items:center">
+                                <span class="accordion-number">8</span>
+                                <span class="accordion-title">Гидравлика — ECD и потери давления</span>
+                                <button class="help-btn" onclick="event.stopPropagation();toggleHelp('help-hyd')" title="Справка по гидравлике">ℹ</button>
+                            </div>
+                            <span class="accordion-chevron">&#9662;</span>
+                        </div>
+                        <div class="accordion-body">
+                            <div class="help-panel" id="help-hyd">
+                                <strong>Модели реологии:</strong> Bingham Plastic (PV + YP) или Power Law (n + K).<br>
+                                <strong>ECD</strong> = ρ_mud + ΔP_ann / (g × TVD) — эквивалентная циркуляционная плотность.<br>
+                                <strong>SPP</strong> = ΔP_pipe + ΔP_bit + ΔP_ann — давление на стояке.
+                            </div>
+                            <div class="form-row cols-3">
+                                <div class="form-group">
+                                    <label class="form-label">Расход (Л/мин)</label>
+                                    <input type="number" class="form-input" id="hyd-flow-rate" value="25" step="1" min="0" placeholder="Л/мин">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Форсунки долота (1/32", через запятую)</label>
+                                    <input type="text" class="form-input" id="hyd-nozzles" value="12,12,12" placeholder="напр. 12,12,12">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Модель реологии</label>
+                                    <select class="form-input" id="hyd-rheo-model" onchange="toggleHydRheoFields()">
+                                        <option value="bingham">Bingham Plastic (PV / YP)</option>
+                                        <option value="power_law">Power Law (n / K)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-row cols-3" id="hyd-bingham-fields">
+                                <div class="form-group">
+                                    <label class="form-label">PV — пласт. вязкость (мПа·с)</label>
+                                    <input type="number" class="form-input" id="hyd-pv" value="20" step="1" min="1">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">YP — дин. напряжение сдвига (Па)</label>
+                                    <input type="number" class="form-input" id="hyd-yp" value="5" step="0.5" min="0">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <input type="number" class="form-input" id="hyd-target-depth" step="10" min="0" placeholder="м">
+                                </div>
+                            </div>
+                            <div class="form-row cols-3" id="hyd-pl-fields" style="display:none">
+                                <div class="form-group">
+                                    <label class="form-label">n — индекс течения</label>
+                                    <input type="number" class="form-input" id="hyd-n" value="0.7" step="0.05" min="0.1" max="1.5">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">K — индекс консистенции (Па·с^n)</label>
+                                    <input type="number" class="form-input" id="hyd-K" value="0.5" step="0.05" min="0.001">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <input type="number" class="form-input" id="hyd-target-depth-pl" step="10" min="0" placeholder="м">
+                                </div>
+                            </div>
+                            <!-- Геометрия ствола скважины -->
+                            <div style="margin-top:12px">
+                                <div class="section-label">Геометрия ствола (секции)</div>
+                                <div class="chart-hint">Для каждой секции укажите диаметр ствола (обсадная ID или открытый ствол). Снизу → вверх не обязательно — расставьте по глубине.</div>
+                                <div class="btn-group" style="margin:6px 0">
+                                    <button class="btn btn-secondary btn-sm" onclick="addWellboreRow()">+ Добавить секцию</button>
+                                </div>
+                                <div class="table-wrap">
+                                    <table class="data-table" id="wellbore-table">
+                                        <thead><tr>
+                                            <th>Верх (м)</th>
+                                            <th>Низ (м)</th>
+                                            <th>Диам. ствола (мм)</th>
+                                            <th style="width:36px"></th>
+                                        </tr></thead>
+                                        <tbody id="wellbore-tbody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="btn-group" style="margin-top:14px">
+                                <button class="btn btn-primary" onclick="calcHydraulics()">Рассчитать гидравлику</button>
+                                <span id="hyd-spinner" class="spinner" style="display:none"></span>
+                            </div>
+                            <div id="hyd-results" style="display:none;margin-top:18px">
+                                <div class="stats-row" id="hyd-kpi"></div>
+                                <div style="margin-top:16px">
+                                    <div class="section-label">Профиль ECD по глубине</div>
+                                    <div class="chart-hint">Красная линия — ρ_mud (статический); синяя — ECD при циркуляции</div>
+                                    <div class="chart-container" id="hyd-ecd-chart" style="min-height:320px"></div>
+                                </div>
+                                <div style="margin-top:16px">
+                                    <div class="section-label">Потери давления по секциям</div>
+                                    <div class="chart-container" id="hyd-dp-chart" style="min-height:260px"></div>
+                                </div>
+                                <details class="details-block" style="margin-top:10px">
+                                    <summary class="details-summary">Детальная таблица (по секциям)</summary>
+                                    <div class="table-wrap" style="margin-top:8px">
+                                        <table class="data-table" id="hyd-section-table">
+                                            <thead><tr>
+                                                <th>Секция</th><th>Тип</th><th>Верх (м)</th><th>Низ (м)</th>
+                                                <th>ΔP (кПа)</th><th>v (м/с)</th><th>Режим</th><th>Re</th>
+                                            </tr></thead>
+                                            <tbody id="hyd-section-tbody"></tbody>
+                                        </table>
+                                    </div>
+                                </details>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- РАСЧЁТ 9 — СВЭБ И СЁРЖ -->
+                    <div class="accordion-item">
+                        <div class="accordion-header" onclick="toggleAccordion(this)">
+                            <div style="display:flex;align-items:center">
+                                <span class="accordion-number">9</span>
+                                <span class="accordion-title">Свэб и Сёрж (Swab &amp; Surge)</span>
+                                <button class="help-btn" onclick="event.stopPropagation();toggleHelp('help-ss')" title="Справка">ℹ</button>
+                            </div>
+                            <span class="accordion-chevron">&#9662;</span>
+                        </div>
+                        <div class="accordion-body">
+                            <div class="help-panel" id="help-ss">
+                                <strong>Метод Burkhardt (1961).</strong> Константа прилипания k = 0.45.<br>
+                                <strong>Сёрж</strong> — спуск инструмента → давление возрастает → риск поглощения/разрыва пласта.<br>
+                                <strong>Свэб</strong> — подъём инструмента → давление падает → риск притока/выброса.<br>
+                                EMW (г/см³) показывает эквивалентный вес раствора с учётом давлений СПО.
+                            </div>
+                            <div class="form-row cols-3">
+                                <div class="form-group">
+                                    <label class="form-label">Скорость СПО (м/мин)</label>
+                                    <input type="number" class="form-input" id="ss-speed" value="0.5" step="0.1" min="0.01" max="3">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Конец трубы</label>
+                                    <select class="form-input" id="ss-open-pipe">
+                                        <option value="true">Открытый (Open End)</option>
+                                        <option value="false">Закрытый (Closed End)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Целевая глубина (м)</label>
+                                    <input type="number" class="form-input" id="ss-target-depth" step="10" min="0" placeholder="м (из T&D)">
+                                </div>
+                            </div>
+                            <div class="btn-group" style="margin-top:10px">
+                                <button class="btn btn-primary" onclick="calcSwabSurge()">Рассчитать Свэб/Сёрж</button>
+                                <span id="ss-spinner" class="spinner" style="display:none"></span>
+                            </div>
+                            <div id="ss-results" style="display:none;margin-top:18px">
+                                <div class="stats-row" id="ss-kpi"></div>
+                                <div style="margin-top:16px">
+                                    <div class="section-label">Профиль давления Сёрж / Свэб по глубине</div>
+                                    <div class="chart-hint">Сёрж (+кПа) и Свэб (−кПа) — приращение к гидростатике</div>
+                                    <div class="chart-container" id="ss-chart" style="min-height:320px"></div>
+                                </div>
                             </div>
                         </div>
                     </div>

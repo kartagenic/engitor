@@ -145,18 +145,21 @@ def get_centralizer_factor(depth_m, centralizers, window=5.0):
 
 def johancsik_run(assembly, survey, target_depth, fluid_density,
                   mu_default, mu_intervals, direction='down', initial_force=0.0,
-                  tortuosity=0.0, centralizers=None, use_stiff_string=False):
+                  tortuosity=0.0, centralizers=None, use_stiff_string=False,
+                  mu_torque=None):
     """
     Расчёт осевых нагрузок по модели Johancsik (1984).
 
     Параметры:
-        assembly     — список элементов (от забоя к устью)
-        survey       — инклинометрия [{depth, inclination, azimuth}, ...]
-        target_depth — глубина забоя компоновки (м)
+        assembly      — список элементов (от забоя к устью)
+        survey        — инклинометрия [{depth, inclination, azimuth}, ...]
+        target_depth  — глубина забоя компоновки (м)
         fluid_density — плотность раствора (г/см³)
-        mu_default   — коэф. трения по умолчанию
-        mu_intervals — [{depth_from, depth_to, mu}, ...]
-        direction    — 'down' (спуск) или 'up' (подъём)
+        mu_default    — коэф. трения для осевых нагрузок (drag)
+        mu_torque     — коэф. трения для крутящего момента (SPE-105068: μ_T ≠ μ_D)
+                        если None — используется mu_default (исходное поведение)
+        mu_intervals  — [{depth_from, depth_to, mu}, ...]
+        direction     — 'down' (спуск) или 'up' (подъём)
         initial_force — начальная сила на забое (кН)
 
     Возвращает:
@@ -203,6 +206,8 @@ def johancsik_run(assembly, survey, target_depth, fluid_density,
         # Add tortuosity: μ_eff = μ + tortuosity × dogleg (rad/m → uses dogleg already in rad)
         if tortuosity > 0:
             mu = mu + tortuosity * (dogleg / elem['length'] if elem['length'] > 0 else 0)
+        # μ for torque (SPE-105068: separate from drag μ)
+        mu_t = (mu_torque if mu_torque is not None else mu)
 
         F_avg = abs(F + W_ax / 2.0)
         N = math.sqrt(W_n ** 2 + (F_avg * dogleg) ** 2)
@@ -243,6 +248,7 @@ def johancsik_run(assembly, survey, target_depth, fluid_density,
             'F_bottom': round(F, 3),
             'F_top': round(F_top, 3),
             'mu': mu,
+            'mu_torque': mu_t,
             'standoff': round(standoff, 3),
         }
         segments.append(seg)
@@ -283,7 +289,8 @@ def calc_torque_profile(segments):
         r = od_mm / 2000.0            # мм → м (радиус)
         if r < 0.02:
             r = 0.08                  # запасной радиус ~160 мм
-        dT = seg['mu'] * seg['N'] * r  # кН·м
+        mu_t = seg.get('mu_torque', seg['mu'])   # SPE-105068: separate μ for torque
+        dT = mu_t * seg['N'] * r  # кН·м
         T += dT
         torques.append({
             'depth': seg['top'],
@@ -583,6 +590,9 @@ def calc_torque_drag():
         tortuosity      = float(data.get('tortuosity', 0.0))
         centralizers    = data.get('centralizers', [])
         use_stiff_string = bool(data.get('use_stiff_string', False))
+        # SPE-105068: separate friction coeff for torque vs drag
+        mu_torque_val   = data.get('mu_torque')
+        mu_torque_val   = float(mu_torque_val) if mu_torque_val is not None else None
 
         validate_survey(survey)
         validate_assembly(assembly)
@@ -608,13 +618,15 @@ def calc_torque_drag():
             assembly, survey, target_depth, fluid_density,
             mu_for_axial, mu_ivs_for_axial, direction='down',
             initial_force=initial_force_down, tortuosity=tortuosity,
-            centralizers=centralizers, use_stiff_string=use_stiff_string)
+            centralizers=centralizers, use_stiff_string=use_stiff_string,
+            mu_torque=mu_torque_val)
 
         forces_pooh, segs_pooh = johancsik_run(
             assembly, survey, target_depth, fluid_density,
             mu_for_axial, mu_ivs_for_axial, direction='up',
             tortuosity=tortuosity,
-            centralizers=centralizers, use_stiff_string=use_stiff_string)
+            centralizers=centralizers, use_stiff_string=use_stiff_string,
+            mu_torque=mu_torque_val)
 
         # ── Крутящий момент ───────────────────────────────
         # For rotating modes, re-run with actual μ to get realistic normal forces for torque
@@ -622,7 +634,8 @@ def calc_torque_drag():
             _, segs_for_torque = johancsik_run(
                 assembly, survey, target_depth, fluid_density,
                 mu_default, mu_intervals, direction='down', tortuosity=tortuosity,
-                centralizers=centralizers, use_stiff_string=use_stiff_string)
+                centralizers=centralizers, use_stiff_string=use_stiff_string,
+                mu_torque=mu_torque_val)
         else:
             segs_for_torque = segs_rih
         torque_profile = calc_torque_profile(segs_for_torque)
@@ -741,6 +754,397 @@ def calc_td_fan():
         return jsonify(success=True, fan_rih=fan_rih, fan_pooh=fan_pooh)
     except Exception as e:
         return jsonify(success=False, error=str(e))
+
+
+# ════════════════════════════════════════════════════════════
+# ГИДРАВЛИКА — ECD, потери давления (Bingham / Power Law)
+# ════════════════════════════════════════════════════════════
+
+def _dp_pipe(Q, d_i, rho, mu_p, tau_y, L, model='bingham', n=1.0, K=1.0):
+    """
+    Потери давления внутри трубы [Па].
+    Модель Bingham Plastic (laminar/turbulent Blasius).
+    Модель Power Law (Dodge-Metzner).
+    Q [м³/с], d_i [м], rho [кг/м³], mu_p [Па·с], tau_y [Па], L [м].
+    """
+    if d_i <= 0 or Q <= 0 or L <= 0:
+        return 0.0, 0.0, 'laminar', 0.0
+    A    = math.pi * d_i ** 2 / 4.0
+    v    = Q / A
+    if model == 'power_law':
+        if K <= 0:
+            K = 1e-3
+        # Metzner-Reed generalised Re for pipe
+        Re = (rho * v ** (2 - n) * d_i ** n) / (K * (8 ** (n - 1)) * ((3 * n + 1) / (4 * n)) ** n)
+        if Re < 3470:
+            # Laminar Power Law (Dodge-Metzner)
+            dp_pm = (4 * K / d_i) * ((3 * n + 1) / (4 * n)) ** n * (8 * v / d_i) ** n
+            regime = 'laminar'
+        else:
+            f = 0.0791 / Re ** 0.25
+            dp_pm = f * rho * v ** 2 / (2 * d_i)
+            regime = 'turbulent'
+    else:  # Bingham Plastic
+        Re = (rho * v * d_i / mu_p) if mu_p > 0 else 1e9
+        if Re < 2100:
+            # Buckingham-Reiner (simplified linear plug-flow form)
+            dp_pm = 32.0 * mu_p * v / d_i ** 2 + (16.0 / 3.0) * tau_y / d_i
+            regime = 'laminar'
+        else:
+            f = 0.0791 / Re ** 0.25
+            dp_pm = f * rho * v ** 2 / (2.0 * d_i)
+            regime = 'turbulent'
+    return dp_pm * L, v, regime, Re
+
+
+def _dp_annulus(Q, D_o, D_i, rho, mu_p, tau_y, L, model='bingham', n=1.0, K=1.0):
+    """
+    Потери давления в кольцевом пространстве [Па] — модель узкой щели (slot).
+    D_o [м] — внешний диаметр (стенка скважины/обсадная), D_i [м] — НД трубы.
+    """
+    if D_o <= D_i or Q <= 0 or L <= 0:
+        return 0.0, 0.0, 'laminar', 0.0
+    A    = math.pi * (D_o ** 2 - D_i ** 2) / 4.0
+    v    = Q / A
+    D_e  = D_o - D_i  # эквивалентный диаметр (slot)
+    if model == 'power_law':
+        if K <= 0:
+            K = 1e-3
+        # Metzner-Reed Re for annulus (slot)
+        Re = (rho * v ** (2 - n) * D_e ** n) / (K * (12 ** (n - 1)) * ((2 * n + 1) / (3 * n)) ** n)
+        if Re < 3470:
+            dp_pm = (2 * K / D_e) * ((2 * n + 1) / (3 * n)) ** n * (12 * v / D_e) ** n
+            regime = 'laminar'
+        else:
+            f = 0.0791 / Re ** 0.25
+            dp_pm = f * rho * v ** 2 / (2.0 * D_e)
+            regime = 'turbulent'
+    else:  # Bingham Plastic
+        Re = (rho * v * D_e / mu_p) if mu_p > 0 else 1e9
+        if Re < 2100:
+            # Bourgoyne et al. (1986) slot-flow form
+            dp_pm = 48.0 * mu_p * v / D_e ** 2 + 6.0 * tau_y / D_e
+            regime = 'laminar'
+        else:
+            f = 0.0791 / Re ** 0.25
+            dp_pm = f * rho * v ** 2 / (2.0 * D_e)
+            regime = 'turbulent'
+    return dp_pm * L, v, regime, Re
+
+
+def _dp_bit(Q, nozzle_diams_m, rho):
+    """Перепад давления на долоте через форсунки [Па]. Cd = 0.95."""
+    if not nozzle_diams_m or Q <= 0:
+        return 0.0
+    TFA  = sum(math.pi * d ** 2 / 4.0 for d in nozzle_diams_m)
+    if TFA <= 0:
+        return 0.0
+    Cd   = 0.95
+    v_n  = Q / TFA
+    return rho * v_n ** 2 / (2.0 * Cd ** 2)
+
+
+def _build_string_intervals(assembly, target_depth):
+    """
+    Строит список интервалов трубы (сверху вниз).
+    Возвращает [{top, bottom, od_m, id_m}].
+    """
+    segs = []
+    depth = target_depth
+    for elem in assembly:            # assembly: забой → устье
+        bot = depth
+        top = depth - elem['length']
+        segs.append({
+            'top':    top,
+            'bottom': bot,
+            'od_m':   elem.get('od', 0.127),
+            'id_m':   elem.get('id', 0.108),
+        })
+        depth = top
+    segs.reverse()   # теперь сверху вниз (от поверхности к забою)
+    return segs
+
+
+@app.route('/api/calculate/hydraulics', methods=['POST'])
+def calc_hydraulics():
+    """
+    Полный расчёт гидравлики:
+      - Потери давления внутри трубы (ΔP_pipe)
+      - Потери давления в КП (ΔP_ann)
+      - Перепад на долоте (ΔP_bit)
+      - Профиль ECD по глубине
+      - Режим течения (ламинар/турбулент) по секциям
+    Модели реологии: Bingham Plastic, Power Law.
+    """
+    try:
+        data             = request.get_json()
+        assembly         = data['assembly']
+        survey           = data.get('survey', [])
+        target_depth     = float(data['target_depth'])
+        fluid_density    = float(data['fluid_density'])    # г/см³ (SI: kg/m³ = ×1000)
+        rho              = fluid_density * 1000.0           # кг/м³
+
+        # Расход Q
+        Q_lpm            = float(data.get('flow_rate', 0.0))  # Л/мин
+        Q                = Q_lpm / 60000.0                     # м³/с
+
+        # Реология
+        model            = data.get('rheology_model', 'bingham')  # 'bingham' | 'power_law'
+        PV_mPas          = float(data.get('pv', 20.0))   # мПа·с
+        YP_Pa            = float(data.get('yp', 5.0))    # Па
+        mu_p             = PV_mPas / 1000.0               # Па·с
+        tau_y            = YP_Pa                           # Па
+        n_pl             = float(data.get('n_pl', 0.7))   # Power Law n
+        K_pl             = float(data.get('K_pl', 0.5))   # Power Law K [Па·с^n]
+
+        # Геометрия ствола
+        wellbore         = data.get('wellbore', [])  # [{top, bottom, d_m}]
+        # Форсунки долота
+        nozzle_diams_32  = data.get('nozzles', [12, 12, 12])  # 1/32 дюйма
+        nozzle_diams_m   = [n32 / 32.0 * 0.0254 for n32 in nozzle_diams_32]
+
+        validate_assembly(assembly)
+
+        # TVD mapping from survey
+        def tvd_at(md):
+            if not survey:
+                return md  # vertical well assumption
+            pts = calc_trajectory(survey)
+            if not pts:
+                return md
+            md_list  = [p['md']  for p in pts]
+            tvd_list = [p['tvd'] for p in pts]
+            if md <= md_list[0]:
+                return tvd_list[0]
+            if md >= md_list[-1]:
+                return tvd_list[-1]
+            for i in range(len(md_list) - 1):
+                if md_list[i] <= md <= md_list[i + 1]:
+                    t = (md - md_list[i]) / (md_list[i + 1] - md_list[i])
+                    return tvd_list[i] + t * (tvd_list[i + 1] - tvd_list[i])
+            return md
+
+        def wellbore_d(md):
+            """Внутренний диаметр ствола (обсадная/открытый ствол) в m."""
+            for wb in sorted(wellbore, key=lambda x: x.get('top', 0)):
+                if wb.get('top', 0) <= md <= wb.get('bottom', 1e9):
+                    return float(wb.get('d_m', 0.216))
+            # Default: open hole 8½" = 0.2159 м
+            return 0.2159
+
+        string_segs = _build_string_intervals(assembly, target_depth)
+
+        # ── Потери внутри трубы (суммарно сверху вниз) ──
+        dp_pipe_total = 0.0
+        pipe_details  = []
+        for seg in string_segs:
+            L = seg['bottom'] - seg['top']
+            dp, v, regime, Re = _dp_pipe(Q, seg['id_m'], rho, mu_p, tau_y, L,
+                                          model=model, n=n_pl, K=K_pl)
+            dp_pipe_total += dp
+            pipe_details.append({
+                'top':    round(seg['top'], 1),
+                'bottom': round(seg['bottom'], 1),
+                'dp_kPa': round(dp / 1000, 2),
+                'v_ms':   round(v, 3),
+                'regime': regime,
+                'Re':     round(Re, 0),
+            })
+
+        # ── Перепад на долоте ──
+        dp_bit = _dp_bit(Q, nozzle_diams_m, rho)
+
+        # ── Потери в КП (снизу вверх → суммируем от забоя к поверхности) ──
+        dp_ann_total    = 0.0
+        ann_details     = []
+        ecd_profile     = []
+        dp_ann_cum      = 0.0   # накопленное снизу вверх
+
+        # Строим секции КП снизу вверх
+        ann_segs = list(reversed(string_segs))
+        for seg in ann_segs:
+            D_o  = wellbore_d((seg['top'] + seg['bottom']) / 2)
+            D_i  = seg['od_m']
+            L    = seg['bottom'] - seg['top']
+            dp, v_ann, regime, Re = _dp_annulus(Q, D_o, D_i, rho, mu_p, tau_y, L,
+                                                 model=model, n=n_pl, K=K_pl)
+            dp_ann_total += dp
+            dp_ann_cum   += dp
+            tvd_top = tvd_at(seg['top'])
+            tvd_bot = tvd_at(seg['bottom'])
+            tvd_mid = (tvd_top + tvd_bot) / 2
+            # ECD at bottom of this segment
+            ecd_gcc = fluid_density + dp_ann_cum / (9810.0 * tvd_bot) if tvd_bot > 0 else fluid_density
+            ann_details.append({
+                'top':    round(seg['top'], 1),
+                'bottom': round(seg['bottom'], 1),
+                'dp_kPa': round(dp / 1000, 2),
+                'v_ms':   round(v_ann, 3),
+                'regime': regime,
+                'Re':     round(Re, 0),
+                'ecd':    round(ecd_gcc, 4),
+            })
+            ecd_profile.append({'depth': round(seg['bottom'], 1), 'ecd': round(ecd_gcc, 4)})
+
+        ecd_profile.sort(key=lambda x: x['depth'])
+
+        # ── Итого ──
+        dp_total   = dp_pipe_total + dp_bit + dp_ann_total
+        # SPP (Surface Pump Pressure) = ΔP_pipe + ΔP_bit + ΔP_ann
+        spp_kPa    = round(dp_total / 1000, 1)
+        # ECD на забое
+        tvd_td     = tvd_at(target_depth)
+        ecd_td     = fluid_density + dp_ann_total / (9810.0 * tvd_td) if tvd_td > 0 else fluid_density
+
+        # Скорость в форсунках
+        TFA_m2 = sum(math.pi * d ** 2 / 4.0 for d in nozzle_diams_m) if nozzle_diams_m else 0
+        v_nozzle = Q / TFA_m2 if TFA_m2 > 0 else 0
+
+        return jsonify(
+            success=True,
+            dp_pipe_kPa=round(dp_pipe_total / 1000, 1),
+            dp_ann_kPa=round(dp_ann_total / 1000, 1),
+            dp_bit_kPa=round(dp_bit / 1000, 1),
+            spp_kPa=spp_kPa,
+            ecd_td=round(ecd_td, 4),
+            ecd_profile=ecd_profile,
+            pipe_sections=pipe_details,
+            ann_sections=ann_details,
+            v_nozzle=round(v_nozzle, 1),
+            Q_lpm=round(Q_lpm, 1),
+        )
+    except (ValueError, KeyError) as e:
+        return jsonify(success=False, error=str(e))
+    except Exception as e:
+        return jsonify(success=False, error=f"Ошибка гидравлики: {e}")
+
+
+# ════════════════════════════════════════════════════════════
+# СВЭБ И СЁРЖ — метод Burkhardt (1961)
+# ════════════════════════════════════════════════════════════
+
+@app.route('/api/calculate/swab_surge', methods=['POST'])
+def calc_swab_surge():
+    """
+    Расчёт давлений свэб (подъём) и сёрж (спуск) при СПО.
+    Метод Burkhardt (1961): константа «прилипания» k = 0.45.
+    """
+    try:
+        data          = request.get_json()
+        assembly      = data['assembly']
+        survey        = data.get('survey', [])
+        target_depth  = float(data['target_depth'])
+        fluid_density = float(data['fluid_density'])
+        rho           = fluid_density * 1000.0
+        PV_mPas       = float(data.get('pv', 20.0))
+        YP_Pa         = float(data.get('yp', 5.0))
+        mu_p          = PV_mPas / 1000.0
+        tau_y         = YP_Pa
+        n_pl          = float(data.get('n_pl', 0.7))
+        K_pl          = float(data.get('K_pl', 0.5))
+        model         = data.get('rheology_model', 'bingham')
+        v_pipe_mpm    = float(data.get('pipe_speed', 0.5))   # скорость СПО, м/мин
+        v_pipe        = v_pipe_mpm / 60.0                     # м/с
+        open_pipe     = bool(data.get('open_pipe', True))
+        wellbore      = data.get('wellbore', [])
+
+        validate_assembly(assembly)
+
+        k = 0.45  # Константа Burkhardt (1961)
+
+        def wellbore_d(md):
+            for wb in sorted(wellbore, key=lambda x: x.get('top', 0)):
+                if wb.get('top', 0) <= md <= wb.get('bottom', 1e9):
+                    return float(wb.get('d_m', 0.216))
+            return 0.2159
+
+        string_segs = _build_string_intervals(assembly, target_depth)
+
+        surge_profile = []
+        swab_profile  = []
+        dp_surge_total = 0.0
+        dp_swab_total  = 0.0
+
+        for seg in string_segs:
+            mid   = (seg['top'] + seg['bottom']) / 2
+            D_w   = wellbore_d(mid)
+            D_p   = seg['od_m']
+            D_pi  = seg['id_m']
+            L     = seg['bottom'] - seg['top']
+            if D_w <= D_p:
+                continue
+
+            A_ann  = math.pi * (D_w ** 2 - D_p ** 2) / 4.0
+            A_pipe = math.pi * D_p ** 2 / 4.0
+            A_int  = math.pi * D_pi ** 2 / 4.0
+
+            # Эффективная скорость в КП (Burkhardt, 1961)
+            if open_pipe:
+                # Открытая труба: часть жидкости проходит через неё
+                v_eff = v_pipe * (A_pipe - A_int) / A_ann + k * v_pipe
+            else:
+                # Закрытая труба / заглушён башмак
+                v_eff = v_pipe * A_pipe / A_ann + k * v_pipe
+
+            # ΔP через аннулярную гидравлику при v_eff
+            # Псевдо-расход Q_eff = v_eff × A_ann
+            Q_eff  = v_eff * A_ann
+            dp_s, _, regime, Re = _dp_annulus(Q_eff, D_w, D_p, rho, mu_p, tau_y, L,
+                                               model=model, n=n_pl, K=K_pl)
+            dp_surge_total += dp_s
+            dp_swab_total  += dp_s  # same magnitude, opposite sign
+
+            surge_profile.append({
+                'depth':    round(seg['bottom'], 1),
+                'dp_kPa':   round(dp_s / 1000, 2),
+                'v_eff':    round(v_eff, 3),
+                'regime':   regime,
+            })
+            swab_profile.append({
+                'depth':   round(seg['bottom'], 1),
+                'dp_kPa':  round(-dp_s / 1000, 2),
+            })
+
+        # EMW (equivalent mud weight) при свэбе и сёрже на забое
+        def tvd_at(md):
+            if not survey:
+                return md
+            pts = calc_trajectory(survey)
+            if not pts:
+                return md
+            md_l  = [p['md']  for p in pts]
+            tvd_l = [p['tvd'] for p in pts]
+            if md <= md_l[0]:
+                return tvd_l[0]
+            if md >= md_l[-1]:
+                return tvd_l[-1]
+            for i in range(len(md_l) - 1):
+                if md_l[i] <= md <= md_l[i + 1]:
+                    t = (md - md_l[i]) / (md_l[i + 1] - md_l[i])
+                    return tvd_l[i] + t * (tvd_l[i + 1] - tvd_l[i])
+            return md
+
+        tvd_td = tvd_at(target_depth)
+        emw_surge = fluid_density + dp_surge_total / (9810.0 * tvd_td) if tvd_td > 0 else fluid_density
+        emw_swab  = fluid_density - dp_swab_total  / (9810.0 * tvd_td) if tvd_td > 0 else fluid_density
+
+        # Критическая скорость: при которой ΔP_surge = fracture - hydrostatic
+        # (оставлено для расширения; сейчас возвращаем только профили)
+
+        return jsonify(
+            success=True,
+            dp_surge_kPa=round(dp_surge_total / 1000, 1),
+            dp_swab_kPa=round(-dp_swab_total / 1000, 1),
+            emw_surge=round(emw_surge, 4),
+            emw_swab=round(emw_swab, 4),
+            surge_profile=surge_profile,
+            swab_profile=swab_profile,
+            v_pipe_mpm=v_pipe_mpm,
+        )
+    except (ValueError, KeyError) as e:
+        return jsonify(success=False, error=str(e))
+    except Exception as e:
+        return jsonify(success=False, error=f"Ошибка Свэб/Сёрж: {e}")
 
 
 @app.route('/api/survey/upload', methods=['POST'])
