@@ -91,12 +91,55 @@ def validate_assembly(assembly):
 
 
 # ════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ — ЖЁСТКАЯ СТРУНА И ЦЕНТРАЛИЗАТОРЫ
+# ════════════════════════════════════════════════════════════
+
+E_STEEL = 207_000.0  # МПа
+
+def calc_EI(od_mm, linwt_kgm):
+    """
+    Бending stiffness EI (Н·м²) для трубного сечения.
+    od_mm     — наружный диаметр, мм
+    linwt_kgm — линейный вес, кг/м (приблизительно пропорционален площади сечения)
+    """
+    od = od_mm / 1000.0          # м
+    # Стандартная площадь поперечного сечения: A = linwt/ρ_steel
+    rho_s = 7850.0               # кг/м³
+    A = linwt_kgm / rho_s        # м²
+    # Для трубного сечения: I = π/64 × (OD⁴ − ID⁴)
+    # ID из A = π/4 × (OD² − ID²): ID² = OD² − 4A/π
+    id2 = od**2 - 4.0 * A / math.pi
+    id2 = max(id2, 0.0)
+    id_ = math.sqrt(id2)
+    I = math.pi / 64.0 * (od**4 - id_**4)  # м⁴
+    return E_STEEL * 1e6 * I                # Н·м²
+
+
+def get_centralizer_factor(depth_m, centralizers, window=5.0):
+    """
+    Находит ближайший централизатор в пределах window м.
+    Возвращает standoff (0..1) или 1.0 если нет.
+    """
+    if not centralizers:
+        return 1.0
+    best = None
+    best_dist = window + 1
+    for c in centralizers:
+        dist = abs(c['depth'] - depth_m)
+        if dist <= window and dist < best_dist:
+            best_dist = dist
+            best = c
+    return best['standoff'] if best else 1.0
+
+
+# ════════════════════════════════════════════════════════════
 # МОДЕЛЬ JOHANCSIK (1984)
 # ════════════════════════════════════════════════════════════
 
 def johancsik_run(assembly, survey, target_depth, fluid_density,
                   mu_default, mu_intervals, direction='down', initial_force=0.0,
-                  tortuosity=0.0):
+                  tortuosity=0.0, centralizers=None, use_stiff_string=False):
     """
     Расчёт осевых нагрузок по модели Johancsik (1984).
 
@@ -157,7 +200,20 @@ def johancsik_run(assembly, survey, target_depth, fluid_density,
 
         F_avg = abs(F + W_ax / 2.0)
         N = math.sqrt(W_n ** 2 + (F_avg * dogleg) ** 2)
-        friction = mu * N
+
+        # ── Stiff String correction (Mitchell 1986 simplified) ──
+        if use_stiff_string and elem['length'] > 0:
+            EI = calc_EI(elem.get('od', 127.0), elem.get('linwt', 30.0))
+            # Bending correction per unit length [kN]
+            q_bend = 2.0 * EI * (dogleg / elem['length']) / (elem['length'] * 1000.0)
+            N = max(0.0, N - q_bend * elem['length'])
+
+        # ── Centralizer standoff reduction ──
+        mid_c = (bot + top) / 2.0
+        standoff = get_centralizer_factor(mid_c, centralizers or [])
+        N_eff = N * (1.0 - standoff) if standoff < 1.0 else N
+
+        friction = mu * N_eff
 
         if direction == 'down':
             F_top = F + W_ax - friction
@@ -176,10 +232,12 @@ def johancsik_run(assembly, survey, target_depth, fluid_density,
             'incl_top': round(incl_top, 2),
             'W_b': round(W_b, 3),
             'N': round(N, 3),
+            'N_eff': round(N_eff, 3),
             'friction': round(friction, 3),
             'F_bottom': round(F, 3),
             'F_top': round(F_top, 3),
             'mu': mu,
+            'standoff': round(standoff, 3),
         }
         segments.append(seg)
 
@@ -512,11 +570,13 @@ def calc_torque_drag():
         assembly      = data['assembly']
         target_depth  = float(data['target_depth'])
         fluid_density = float(data['fluid_density'])
-        mu_default    = float(data.get('mu_default', 0.25))
-        mu_intervals  = data.get('mu_intervals', [])
-        op_mode       = data.get('op_mode', 'rih_slide')
-        wob           = float(data.get('wob', 0.0))
-        tortuosity    = float(data.get('tortuosity', 0.0))
+        mu_default      = float(data.get('mu_default', 0.25))
+        mu_intervals    = data.get('mu_intervals', [])
+        op_mode         = data.get('op_mode', 'rih_slide')
+        wob             = float(data.get('wob', 0.0))
+        tortuosity      = float(data.get('tortuosity', 0.0))
+        centralizers    = data.get('centralizers', [])
+        use_stiff_string = bool(data.get('use_stiff_string', False))
 
         validate_survey(survey)
         validate_assembly(assembly)
@@ -541,19 +601,22 @@ def calc_torque_drag():
         forces_rih, segs_rih = johancsik_run(
             assembly, survey, target_depth, fluid_density,
             mu_for_axial, mu_ivs_for_axial, direction='down',
-            initial_force=initial_force_down, tortuosity=tortuosity)
+            initial_force=initial_force_down, tortuosity=tortuosity,
+            centralizers=centralizers, use_stiff_string=use_stiff_string)
 
         forces_pooh, segs_pooh = johancsik_run(
             assembly, survey, target_depth, fluid_density,
             mu_for_axial, mu_ivs_for_axial, direction='up',
-            tortuosity=tortuosity)
+            tortuosity=tortuosity,
+            centralizers=centralizers, use_stiff_string=use_stiff_string)
 
         # ── Крутящий момент ───────────────────────────────
         # For rotating modes, re-run with actual μ to get realistic normal forces for torque
         if is_rotating:
             _, segs_for_torque = johancsik_run(
                 assembly, survey, target_depth, fluid_density,
-                mu_default, mu_intervals, direction='down', tortuosity=tortuosity)
+                mu_default, mu_intervals, direction='down', tortuosity=tortuosity,
+                centralizers=centralizers, use_stiff_string=use_stiff_string)
         else:
             segs_for_torque = segs_rih
         torque_profile = calc_torque_profile(segs_for_torque)
@@ -723,6 +786,7 @@ def calc_reachability():
         mu_default = float(data.get('mu_default', 0.25))
         mu_intervals = data.get('mu_intervals', [])
         tortuosity = float(data.get('tortuosity', 0.0))
+        centralizers = data.get('centralizers', [])
 
         validate_survey(survey)
         validate_assembly(assembly)
@@ -735,7 +799,8 @@ def calc_reachability():
 
         forces, segments = johancsik_run(
             assembly, survey, target_depth, fluid_density,
-            mu_default, mu_intervals, direction='down', tortuosity=tortuosity)
+            mu_default, mu_intervals, direction='down', tortuosity=tortuosity,
+            centralizers=centralizers)
 
         reaches = True
         critical_depth = None
@@ -779,6 +844,7 @@ def calc_hookload():
         mu_min        = float(data.get('mu_min', 0.15))
         mu_max        = float(data.get('mu_max', 0.30))
         packer_force  = float(data.get('packer_set_force', 0.0))
+        centralizers  = data.get('centralizers', [])
 
         validate_survey(survey)
         validate_assembly(assembly)
@@ -793,9 +859,9 @@ def calc_hookload():
         results = {}
         for mu in mu_list:
             f_rih,  _ = johancsik_run(assembly, survey, target_depth, fluid_density,
-                                      mu, [], direction='down')
+                                      mu, [], direction='down', centralizers=centralizers)
             f_pooh, _ = johancsik_run(assembly, survey, target_depth, fluid_density,
-                                      mu, [], direction='up')
+                                      mu, [], direction='up', centralizers=centralizers)
             results[mu] = {
                 'rih':  [{'depth': p['depth'], 'force': p['force']} for p in f_rih],
                 'pooh': [{'depth': p['depth'], 'force': p['force']} for p in f_pooh],
@@ -848,13 +914,14 @@ def calc_sensitivity():
         mu_base       = float(data.get('mu_base', 0.25))
         delta_pct     = float(data.get('delta_pct', 20.0)) / 100.0
         tortuosity    = float(data.get('tortuosity', 0.0))
+        centralizers  = data.get('centralizers', [])
 
         validate_survey(survey)
         validate_assembly(assembly)
 
         def pooh_surface(asm, td, fd, mu):
             frc, _ = johancsik_run(asm, survey, td, fd, mu, [], direction='up',
-                                   tortuosity=tortuosity)
+                                   tortuosity=tortuosity, centralizers=centralizers)
             return frc[-1]['force'] if frc else 0.0
 
         def scale_assembly_weight(asm, factor):
@@ -939,6 +1006,7 @@ def calc_packer():
         mu_intervals = data.get('mu_intervals', [])
         packer_set_force = float(data['packer_set_force'])
         packer_idx = int(data['packer_element_index'])
+        centralizers = data.get('centralizers', [])
 
         validate_survey(survey)
         validate_assembly(assembly)
@@ -969,7 +1037,7 @@ def calc_packer():
         forces, segments = johancsik_run(
             assembly_above, survey, packer_top_depth, fluid_density,
             mu_default, mu_intervals, direction='up',
-            initial_force=packer_set_force)
+            initial_force=packer_set_force, centralizers=centralizers)
 
         hook_load = forces[-1]['force'] if forces else packer_set_force
 
@@ -1073,6 +1141,7 @@ def calibrate_friction():
         fluid_density = float(data['fluid_density'])
         field_data    = data['field_data']   # [{depth, hookload}, ...]
         direction     = data.get('direction', 'up')
+        centralizers  = data.get('centralizers', [])
 
         if not field_data:
             raise ValueError("Нет полевых замеров для калибровки")
@@ -1081,7 +1150,8 @@ def calibrate_friction():
 
         def rms(mu_val):
             frc, _ = johancsik_run(assembly, survey, target_depth,
-                                   fluid_density, mu_val, [], direction=direction)
+                                   fluid_density, mu_val, [], direction=direction,
+                                   centralizers=centralizers)
             ds = [f['depth'] for f in frc]
             vs = [f['force'] for f in frc]
             return math.sqrt(
@@ -1103,7 +1173,8 @@ def calibrate_friction():
                 best_rms, best_mu = r, mu
 
         frc_f, _ = johancsik_run(assembly, survey, target_depth,
-                                  fluid_density, best_mu, [], direction=direction)
+                                  fluid_density, best_mu, [], direction=direction,
+                                  centralizers=centralizers)
         ds = [f['depth'] for f in frc_f]
         vs = [f['force'] for f in frc_f]
         comp = []
@@ -1144,6 +1215,7 @@ def export_pdf():
         mu_intervals     = data.get('mu_intervals', [])
         packer_set_force = float(data.get('packer_set_force', 0))
         packer_idx       = int(data.get('packer_element_index', 0))
+        centralizers     = data.get('centralizers', [])
 
         buf = io.BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=A4,
@@ -1253,10 +1325,12 @@ def export_pdf():
             try:
                 forces_d, segs_d = johancsik_run(
                     assembly, survey, target_depth, fluid_density,
-                    mu_default, mu_intervals, direction='down')
+                    mu_default, mu_intervals, direction='down',
+                    centralizers=centralizers)
                 forces_u, segs_u = johancsik_run(
                     assembly, survey, target_depth, fluid_density,
-                    mu_default, mu_intervals, direction='up')
+                    mu_default, mu_intervals, direction='up',
+                    centralizers=centralizers)
                 torque_prof = calc_torque_profile(segs_d)
                 buckling    = calc_buckling(segs_d)
 
@@ -1366,7 +1440,8 @@ def export_pdf():
             try:
                 forces_d2, _ = johancsik_run(
                     assembly, survey, target_depth, fluid_density,
-                    mu_default, mu_intervals, direction='down')
+                    mu_default, mu_intervals, direction='down',
+                    centralizers=centralizers)
                 reaches = all(f['force'] >= 0 for f in forces_d2)
                 crit    = next((f['depth'] for f in forces_d2 if f['force'] < 0), None)
                 if reaches:
@@ -1392,7 +1467,8 @@ def export_pdf():
             try:
                 forces_u2, _ = johancsik_run(
                     assembly, survey, target_depth, fluid_density,
-                    mu_default, mu_intervals, direction='up')
+                    mu_default, mu_intervals, direction='up',
+                    centralizers=centralizers)
                 hl = forces_u2[-1]['force'] if forces_u2 else 0
                 els.append(Paragraph(f"Нагрузка на крюке: {hl:.2f} кН", body_s))
                 els.append(Spacer(1, 2*mm))
@@ -1415,7 +1491,7 @@ def export_pdf():
                     fp, sp2 = johancsik_run(
                         aa, survey, packer_top, fluid_density,
                         mu_default, mu_intervals, direction='up',
-                        initial_force=packer_set_force)
+                        initial_force=packer_set_force, centralizers=centralizers)
                     hl_p = fp[-1]['force'] if fp else packer_set_force
                     wk_name, wk_load = '', float('inf')
                     for s in sp2:
@@ -1475,6 +1551,7 @@ def export_excel():
         mu_intervals = data.get('mu_intervals', [])
         packer_set_force = float(data.get('packer_set_force', 0))
         packer_idx = int(data.get('packer_element_index', 0))
+        centralizers = data.get('centralizers', [])
 
         wb = openpyxl.Workbook()
 
@@ -1508,7 +1585,8 @@ def export_excel():
             # Доходимость
             forces_d, _ = johancsik_run(
                 assembly, survey, target_depth, fluid_density,
-                mu_default, mu_intervals, direction='down')
+                mu_default, mu_intervals, direction='down',
+                centralizers=centralizers)
             ws3 = wb.create_sheet('Доходимость')
             h3 = ['Глубина (м)', 'Элемент', 'Осевая сила (кН)',
                    'Вес архим. (кН)', 'Норм. сила (кН)', 'Трение (кН)']
@@ -1523,7 +1601,8 @@ def export_excel():
             # Вес на крюке
             forces_u, _ = johancsik_run(
                 assembly, survey, target_depth, fluid_density,
-                mu_default, mu_intervals, direction='up')
+                mu_default, mu_intervals, direction='up',
+                centralizers=centralizers)
             ws4 = wb.create_sheet('Вес на крюке')
             ws4.append(h3)
             _style_header(ws4, 1, len(h3))
@@ -1542,7 +1621,7 @@ def export_excel():
                     fp_p, sp_p = johancsik_run(
                         aa, survey, packer_top, fluid_density,
                         mu_default, mu_intervals, direction='up',
-                        initial_force=packer_set_force)
+                        initial_force=packer_set_force, centralizers=centralizers)
                     ws5 = wb.create_sheet('Пакер')
                     hp = ['Элемент', 'Макс. нагрузка (кН)',
                           'Факт. сила (кН)', 'Запас прочности (%)']
@@ -1560,10 +1639,12 @@ def export_excel():
             # ── Лист «T&D» — полный анализ Torque & Drag ──
             forces_td_d, segs_td_d = johancsik_run(
                 assembly, survey, target_depth, fluid_density,
-                mu_default, mu_intervals, direction='down')
+                mu_default, mu_intervals, direction='down',
+                centralizers=centralizers)
             forces_td_u, segs_td_u = johancsik_run(
                 assembly, survey, target_depth, fluid_density,
-                mu_default, mu_intervals, direction='up')
+                mu_default, mu_intervals, direction='up',
+                centralizers=centralizers)
             torque_pr = calc_torque_profile(segs_td_d)
             buckling  = calc_buckling(segs_td_d)
 

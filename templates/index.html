@@ -221,6 +221,37 @@
                     </div>
                 </div>
 
+                <!-- Централизаторы -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">Централизаторы</span>
+                        <div style="display:flex;align-items:center;gap:8px">
+                            <button class="help-btn" onclick="toggleHelp('help-cent')" title="О централизаторах">ℹ</button>
+                            <button class="btn btn-secondary btn-sm" onclick="addCentralizerRow()">+ Добавить</button>
+                        </div>
+                    </div>
+                    <div class="card-body no-pad">
+                        <div class="help-panel" id="help-cent" style="margin:8px 12px 0">
+                            Централизаторы снижают нормальную нагрузку N в месте установки: N_eff = N × (1 − standoff).
+                            Standoff = доля удержания от стенки (0 = нет эффекта, 1 = полная центровка).
+                            Типовые значения: жёсткий 0.90–0.95, лепестковый 0.60–0.75, роликовый 0.80–0.85.
+                        </div>
+                        <div class="table-wrap">
+                            <table class="data-table" id="centralizer-table">
+                                <thead>
+                                    <tr>
+                                        <th>Глубина MD (<span class="unit-lbl" data-unit="depth">м</span>)</th>
+                                        <th>Тип</th>
+                                        <th>Standoff (0–1)</th>
+                                        <th style="width:36px"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="centralizer-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Коэффициент трения -->
                 <div class="card">
                     <div class="card-header">
@@ -326,6 +357,8 @@
                             <button class="btn btn-ghost btn-sm" onclick="removeAssemblyRow()">Удалить последний</button>
                             <button class="btn btn-ghost btn-sm" onclick="clearAssembly()">Очистить</button>
                             <button class="btn btn-ghost btn-sm" onclick="loadSampleAssembly()">Образец</button>
+                            <button class="btn btn-ghost btn-sm" onclick="saveBhaTemplate()" title="Сохранить компоновку как шаблон">💾 Шаблон</button>
+                            <button class="btn btn-ghost btn-sm" onclick="showBhaTemplates()" title="Загрузить шаблон БК">📂 Шаблоны</button>
                         </div>
                     </div>
                     <div class="card-body no-pad">
@@ -614,6 +647,17 @@
                             <span class="accordion-chevron">&#9662;</span>
                         </div>
                         <div class="accordion-body">
+                            <!-- Модель T&D -->
+                            <div style="margin-bottom:10px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+                                <div>
+                                    <div class="form-label" style="margin-bottom:4px">Модель расчёта</div>
+                                    <div class="mode-toggle" id="td-string-model">
+                                        <button class="toggle-btn active" data-model="soft" onclick="setStringModel('soft')">Soft String</button>
+                                        <button class="toggle-btn" data-model="stiff" onclick="setStringModel('stiff')">Stiff String ★</button>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- Режим операции -->
                             <div style="margin-bottom:12px">
                                 <div class="form-label" style="margin-bottom:6px">Режим операции</div>
@@ -1050,6 +1094,19 @@
 <div id="toast-container" aria-live="polite"></div>
 
 <!-- Project List Modal -->
+<!-- BHA Template Modal -->
+<div id="bha-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeBhaModal()">
+    <div class="modal-box">
+        <div class="modal-header">
+            <span class="modal-title">Шаблоны компоновки (БК)</span>
+            <button class="modal-close" onclick="closeBhaModal()">×</button>
+        </div>
+        <div class="modal-body" id="bha-list-container">
+            <div style="color:var(--text-muted);font-size:13px">Нет сохранённых шаблонов</div>
+        </div>
+    </div>
+</div>
+
 <div id="project-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeProjectModal()">
     <div class="modal-box">
         <div class="modal-header">

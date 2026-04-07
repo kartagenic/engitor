@@ -137,6 +137,20 @@ function convertInputValues() {
             }
         }
     }
+    // Convert centralizer-tbody depth column
+    const centRows = document.getElementById('centralizer-tbody')?.rows || [];
+    for (const row of centRows) {
+        const inp = row.querySelectorAll('input')[0];
+        if (!inp) continue;
+        const val = parseFloat(inp.value);
+        if (!isNaN(val) && val !== 0) {
+            if (unitSystem === 'field') {
+                inp.value = (val / FIELD_TO_SI['depth']).toFixed(2).replace(/\.?0+$/, '');
+            } else {
+                inp.value = (val * FIELD_TO_SI['depth']).toFixed(2).replace(/\.?0+$/, '');
+            }
+        }
+    }
 }
 
 // Init unit system on load
@@ -197,6 +211,13 @@ function getProjectData() {
         formations.push({ depth: ins[0]?.value, name: ins[1]?.value, type: sel?.value ?? 'formation' });
     });
 
+    const centralizers = [];
+    document.getElementById('centralizer-tbody')?.querySelectorAll('tr').forEach(tr => {
+        const ins = tr.querySelectorAll('input');
+        const sel = tr.querySelector('select');
+        centralizers.push({ depth: ins[0]?.value, type: sel?.value ?? 'rigid', standoff: ins[1]?.value });
+    });
+
     return {
         version: 1,
         unitSystem,
@@ -209,10 +230,12 @@ function getProjectData() {
         rigHookCapacity: document.getElementById('rig-hook-capacity')?.value ?? '',
         rigMaxTorque:    document.getElementById('rig-max-torque')?.value ?? '',
         rigMaxRpm:       document.getElementById('rig-max-rpm')?.value ?? '',
+        tdStringModel: _tdStringModel,
         survey,
         assembly,
         muIntervals,
         formations,
+        centralizers,
         calcInputs: {
             reachDepth:    document.getElementById('reach-target-depth')?.value ?? '',
             hookDepth:     document.getElementById('hook-target-depth')?.value ?? '',
@@ -274,6 +297,16 @@ function applyProjectData(data) {
     document.getElementById('formation-tbody').innerHTML = '';
     (data.formations || []).forEach(f => addFormationRow(f.depth, f.name, f.type));
 
+    // Centralizers
+    const centTbody = document.getElementById('centralizer-tbody');
+    if (centTbody) {
+        centTbody.innerHTML = '';
+        (data.centralizers || []).forEach(c => addCentralizerRow(c.depth, c.type, parseFloat(c.standoff)));
+    }
+
+    // Stiff string model
+    if (data.tdStringModel) setStringModel(data.tdStringModel);
+
     // Calc inputs
     const ci = data.calcInputs || {};
     const setV = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
@@ -320,7 +353,10 @@ function newProject() {
     document.getElementById('assembly-tbody').innerHTML = '';
     document.getElementById('mu-tbody').innerHTML = '';
     document.getElementById('formation-tbody').innerHTML = '';
+    const _ct = document.getElementById('centralizer-tbody');
+    if (_ct) _ct.innerHTML = '';
     updateAssemblySummary();
+    setStringModel('soft');
     document.getElementById('project-saved-label').textContent = '';
     showInfo('Новый проект создан');
 }
@@ -864,6 +900,208 @@ function addDepthAnnotations(divId, tops, rigCapacityKN) {
 }
 
 // ════════════════════════════════════════════════════════════
+// ЦЕНТРАЛИЗАТОРЫ
+// ════════════════════════════════════════════════════════════
+
+const CENTRALIZER_TYPES = {
+    'rigid':    { label: 'Жёсткий',      standoff: 0.92 },
+    'bow':      { label: 'Лепестковый',  standoff: 0.70 },
+    'roller':   { label: 'Роликовый',    standoff: 0.82 },
+    'custom':   { label: 'Пользов.',     standoff: 0.80 },
+};
+
+const _CENT_TYPE_HTML = Object.entries(CENTRALIZER_TYPES)
+    .map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+
+function addCentralizerRow(depth, type, standoff) {
+    const tbody = document.getElementById('centralizer-tbody');
+    if (!tbody) return;
+    const typeVal = type || 'rigid';
+    const defaultStandoff = standoff ?? (CENTRALIZER_TYPES[typeVal]?.standoff ?? 0.80);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+        <td><input type="number" step="any" value="${depth ?? ''}" placeholder="0"></td>
+        <td>
+            <select class="form-input cent-type-sel" style="padding:3px 4px;font-size:11px;width:100%"
+                    onchange="onCentTypeChange(this)">
+                ${_CENT_TYPE_HTML}
+            </select>
+        </td>
+        <td><input type="number" step="0.01" min="0" max="1"
+                   value="${defaultStandoff}" placeholder="0.80"></td>
+        <td><button class="btn-row-delete" onclick="this.closest('tr').remove()">&times;</button></td>
+    `;
+    const sel = tr.querySelector('select');
+    sel.value = typeVal;
+    tbody.appendChild(tr);
+}
+
+function onCentTypeChange(sel) {
+    const row = sel.closest('tr');
+    const standoffInput = row.querySelectorAll('input')[1];
+    const typeKey = sel.value;
+    if (typeKey !== 'custom' && CENTRALIZER_TYPES[typeKey]) {
+        standoffInput.value = CENTRALIZER_TYPES[typeKey].standoff;
+    }
+}
+
+function getCentralizerData() {
+    const rows = document.getElementById('centralizer-tbody')?.rows || [];
+    const result = [];
+    for (const row of rows) {
+        const ins = row.querySelectorAll('input');
+        const sel = row.querySelector('select');
+        const depth = parseFloat(ins[0]?.value);
+        const type = sel?.value || 'rigid';
+        const standoff = parseFloat(ins[1]?.value);
+        if (!isNaN(depth) && depth > 0 && !isNaN(standoff)) {
+            result.push({ depth: toSI(depth, 'depth'), type, standoff });
+        }
+    }
+    return result;
+}
+
+
+// ════════════════════════════════════════════════════════════
+// BHA ШАБЛОНЫ
+// ════════════════════════════════════════════════════════════
+
+const WM_BHA_TEMPLATES_KEY = 'wm-bha-templates';
+
+// Built-in default templates (read-only, shown with lock icon)
+const BHA_DEFAULT_TEMPLATES = [
+    {
+        key: '__default_drill',
+        name: 'Стандартная КНБК (бурение)',
+        builtin: true,
+        rows: [
+            { name: 'Долото',           len: 0.5,   weight: 25,   od: 215.9, linwt: 50,  maxLoad: 300 },
+            { name: 'PDM (забойный двигатель)', len: 8.0, weight: 800, od: 172.0, linwt: 100, maxLoad: 500 },
+            { name: 'Немагнитная УБТ',  len: 9.0,   weight: 900,  od: 165.0, linwt: 100, maxLoad: 600 },
+            { name: 'УБТ 165',          len: 90.0,  weight: 9000, od: 165.0, linwt: 100, maxLoad: 800 },
+            { name: 'БТ 127',           len: 1800.0,weight: 72000,od: 127.0, linwt: 40,  maxLoad: 400 },
+        ],
+    },
+    {
+        key: '__default_casing',
+        name: 'Обсадная колонна (спуск 245 мм)',
+        builtin: true,
+        rows: [
+            { name: 'Башмак',           len: 1.5,   weight: 80,   od: 244.5, linwt: 50,  maxLoad: 1500 },
+            { name: 'Обсадная труба 245', len: 2500.0, weight: 230000, od: 244.5, linwt: 92, maxLoad: 1500 },
+        ],
+    },
+    {
+        key: '__default_liner',
+        name: 'Хвостовик (спуск 178 мм)',
+        builtin: true,
+        rows: [
+            { name: 'Башмак хвостовика', len: 1.0,  weight: 40,   od: 177.8, linwt: 35,  maxLoad: 800 },
+            { name: 'Хвостовик 178',    len: 800.0, weight: 50000,od: 177.8, linwt: 62,  maxLoad: 800 },
+            { name: 'Подвеска хвостовика', len: 2.0, weight: 200, od: 177.8, linwt: 100, maxLoad: 800 },
+        ],
+    },
+];
+
+function saveBhaTemplate() {
+    const name = prompt('Название шаблона КНБК:', 'Моя КНБК');
+    if (!name) return;
+
+    const rows = [];
+    document.getElementById('assembly-tbody').querySelectorAll('tr').forEach(tr => {
+        const nums = tr.querySelectorAll('input[type="number"]');
+        const nameEl = tr.querySelector('input[type="text"]');
+        rows.push({
+            name:    nameEl?.value ?? '',
+            len:     nums[0]?.value ?? '',
+            weight:  nums[1]?.value ?? '',
+            od:      nums[2]?.value ?? '',
+            linwt:   nums[3]?.value ?? '',
+            maxLoad: nums[4]?.value ?? '',
+            grade:   tr.querySelector('select.grade-sel')?.value ?? '',
+            conn:    tr.querySelector('select.conn-sel')?.value ?? '',
+        });
+    });
+
+    if (!rows.length) { showError('Компоновка пуста — нечего сохранять'); return; }
+
+    const templates = JSON.parse(localStorage.getItem(WM_BHA_TEMPLATES_KEY) || '{}');
+    const key = 'bha_' + Date.now();
+    templates[key] = { key, name, ts: Date.now(), unitSystem, rows };
+    localStorage.setItem(WM_BHA_TEMPLATES_KEY, JSON.stringify(templates));
+    showSuccess(`Шаблон «${name}» сохранён`);
+}
+
+function showBhaTemplates() {
+    const modal = document.getElementById('bha-modal');
+    if (!modal) return;
+
+    const userTemplates = JSON.parse(localStorage.getItem(WM_BHA_TEMPLATES_KEY) || '{}');
+    const allTemplates = [
+        ...BHA_DEFAULT_TEMPLATES,
+        ...Object.values(userTemplates).sort((a, b) => b.ts - a.ts),
+    ];
+
+    const listEl = document.getElementById('bha-template-list');
+    if (!listEl) return;
+
+    if (!allTemplates.length) {
+        listEl.innerHTML = '<div style="color:var(--text-muted);padding:16px;text-align:center">Нет сохранённых шаблонов</div>';
+    } else {
+        listEl.innerHTML = allTemplates.map(t => {
+            const dateStr = t.builtin ? 'Встроенный' : new Date(t.ts).toLocaleDateString('ru');
+            const rowCount = t.rows.length;
+            return `
+            <div class="project-list-item" style="display:flex;justify-content:space-between;align-items:center">
+                <div style="flex:1;cursor:pointer" onclick="loadBhaTemplate('${t.key}')">
+                    <div style="font-weight:500">${t.builtin ? '🔒 ' : ''}${t.name}</div>
+                    <div style="font-size:11px;color:var(--text-muted)">${dateStr} · ${rowCount} элем.</div>
+                </div>
+                ${t.builtin ? '' : `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="deleteBhaTemplate('${t.key}')">✕</button>`}
+            </div>`;
+        }).join('');
+    }
+
+    modal.style.display = 'flex';
+}
+
+function loadBhaTemplate(key) {
+    let tpl = BHA_DEFAULT_TEMPLATES.find(t => t.key === key);
+    if (!tpl) {
+        const userTemplates = JSON.parse(localStorage.getItem(WM_BHA_TEMPLATES_KEY) || '{}');
+        tpl = userTemplates[key];
+    }
+    if (!tpl) { showError('Шаблон не найден'); return; }
+
+    if (!confirm(`Загрузить шаблон «${tpl.name}»? Текущая компоновка будет заменена.`)) return;
+
+    document.getElementById('assembly-tbody').innerHTML = '';
+
+    // If template was saved in a different unit system, display values as-is (stored in display units at save time)
+    tpl.rows.forEach(r => {
+        makeAssemblyRow(r.name, r.len, r.weight, r.od, r.maxLoad, r.linwt, r.grade, r.conn);
+    });
+
+    renumberRows('assembly-tbody');
+    updateAssemblySummary();
+    closeBhaModal();
+    showSuccess(`Шаблон «${tpl.name}» загружен (${tpl.rows.length} элем.)`);
+}
+
+function deleteBhaTemplate(key) {
+    if (!confirm('Удалить шаблон?')) return;
+    const templates = JSON.parse(localStorage.getItem(WM_BHA_TEMPLATES_KEY) || '{}');
+    delete templates[key];
+    localStorage.setItem(WM_BHA_TEMPLATES_KEY, JSON.stringify(templates));
+    showBhaTemplates();   // refresh list
+}
+
+function closeBhaModal() {
+    const modal = document.getElementById('bha-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+// ════════════════════════════════════════════════════════════
 // КОМПОНОВКА
 // ════════════════════════════════════════════════════════════
 
@@ -1208,6 +1446,7 @@ function collectRequestData(targetDepth) {
         mu_default: parseFloat(document.getElementById('mu-openhole').value) || 0.25,
         mu_intervals: getMuIntervals(),
         tortuosity: parseFloat(document.getElementById('mu-tortuosity')?.value) || 0,
+        centralizers: getCentralizerData(),
     };
 }
 
@@ -1690,6 +1929,7 @@ async function calcSensitivity() {
 // ════════════════════════════════════════════════════════════
 
 let _tdOpMode = 'rih_slide';
+let _tdStringModel = 'soft';
 
 function setTdMode(mode) {
     _tdOpMode = mode;
@@ -1700,6 +1940,13 @@ function setTdMode(mode) {
     if (wobGroup) wobGroup.style.display = mode === 'rotate_on' ? '' : 'none';
 }
 
+function setStringModel(model) {
+    _tdStringModel = model;
+    document.querySelectorAll('#td-string-model .toggle-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.model === model);
+    });
+}
+
 async function calcTorqueDrag() {
     const td = parseFloat(document.getElementById('td-target-depth').value);
     if (!td || td <= 0) { showError('Укажите целевую глубину'); return; }
@@ -1708,8 +1955,9 @@ async function calcTorqueDrag() {
     if (data.survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
     if (!data.assembly.length)  { showError('Заполните компоновку'); return; }
 
-    // Pass operating mode and WOB
+    // Pass operating mode, WOB, and string model
     data.op_mode = _tdOpMode;
+    data.use_stiff_string = (_tdStringModel === 'stiff');
     const wob = parseFloat(document.getElementById('td-wob')?.value);
     if (!isNaN(wob) && wob > 0) data.wob = toSI(wob, 'force');
 
@@ -1751,6 +1999,10 @@ async function calcTorqueDrag() {
             <div class="stat-card">
                 <div class="stat-label">Вес с поправкой BF</div>
                 <div class="stat-value">${res.W_buoy_kN}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Модель</div>
+                <div class="stat-value" style="font-size:13px">${_tdStringModel === 'stiff' ? 'Stiff String' : 'Soft String'}</div>
             </div>`;
 
         // ── Совмещённый Drag-график (RIH + POOH) ──
