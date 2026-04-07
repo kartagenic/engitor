@@ -276,11 +276,26 @@ function applyProjectData(data) {
 
     // Well params
     if (data.fluidDensity) document.getElementById('fluid-density').value = data.fluidDensity;
+    if (data.fluidRheologyModel) { const el = document.getElementById('fluid-rheology-model'); if (el) el.value = data.fluidRheologyModel; }
+    if (data.fluidBaseType)      { const el = document.getElementById('fluid-base-type');      if (el) el.value = data.fluidBaseType; }
+    if (data.fluidPv)            { const el = document.getElementById('fluid-pv');             if (el) el.value = data.fluidPv; }
+    if (data.fluidYp)            { const el = document.getElementById('fluid-yp');             if (el) el.value = data.fluidYp; }
+    if (data.fluidTemp)          { const el = document.getElementById('fluid-temp');           if (el) el.value = data.fluidTemp; }
     if (data.muOpenhole)   document.getElementById('mu-openhole').value = data.muOpenhole;
     if (data.muCased)      document.getElementById('mu-cased').value    = data.muCased;
     if (data.muLiner)      document.getElementById('mu-liner').value    = data.muLiner;
     if (data.shoeCasing)   document.getElementById('shoe-casing').value = data.shoeCasing;
     if (data.shoeLiner)    document.getElementById('shoe-liner').value  = data.shoeLiner;
+
+    // Datum / Offshore
+    if (data.datumType) {
+        const el = document.getElementById('datum-type');
+        if (el) { el.value = data.datumType; toggleDatumFields(); }
+    }
+    if (data.datumWellheadElev) { const el = document.getElementById('datum-wellhead-elev'); if (el) el.value = data.datumWellheadElev; }
+    if (data.datumAirGap)       { const el = document.getElementById('datum-air-gap');       if (el) el.value = data.datumAirGap; }
+    if (data.datumWaterDepth)   { const el = document.getElementById('datum-water-depth');   if (el) el.value = data.datumWaterDepth; }
+    if (data.datumMudlineTvd)   { const el = document.getElementById('datum-mudline-tvd');   if (el) el.value = data.datumMudlineTvd; }
 
     // Rig
     if (document.getElementById('rig-hook-capacity')) {
