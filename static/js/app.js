@@ -611,11 +611,13 @@ document.querySelectorAll('.nav-item').forEach(item => {
 function openSidebar() {
     document.querySelector('.sidebar').classList.add('open');
     document.getElementById('sidebar-overlay').classList.add('visible');
+    document.body.style.overflow = 'hidden';
 }
 
 function closeSidebar() {
     document.querySelector('.sidebar').classList.remove('open');
     document.getElementById('sidebar-overlay').classList.remove('visible');
+    document.body.style.overflow = '';
 }
 
 function onVizTabOpen() {

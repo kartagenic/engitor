@@ -1169,7 +1169,7 @@ select.form-input {
     .sidebar {
         transform: translateX(-100%);
         transition: transform 0.25s ease;
-        z-index: 200;
+        z-index: 9999;
     }
     .sidebar.open {
         transform: translateX(0);
@@ -1180,7 +1180,7 @@ select.form-input {
         position: fixed;
         inset: 0;
         background: rgba(0, 0, 0, 0.55);
-        z-index: 199;
+        z-index: 9998;
         opacity: 0;
         pointer-events: none;
         transition: opacity 0.25s ease;
