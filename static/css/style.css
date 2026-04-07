@@ -1123,3 +1123,33 @@ select.form-input {
 .empty-state-icon  { font-size: 48px; color: var(--text-muted); line-height: 1; }
 .empty-state-title { font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0; }
 .empty-state-text  { font-size: 14px; color: var(--text-secondary); margin: 0; line-height: 1.55; }
+
+/* ════════════════════════════════════════════════════════════
+   WELL STRUCTURE TREE
+   ════════════════════════════════════════════════════════════ */
+.well-struct-tree {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 8px 12px;
+    background: var(--bg-input);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: wrap;
+}
+.well-struct-tree .wst-node {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+.well-struct-tree .wst-sep {
+    color: var(--text-muted);
+    margin: 0 6px;
+}
+.well-struct-tree .wst-empty {
+    color: var(--text-muted);
+    font-style: italic;
+}

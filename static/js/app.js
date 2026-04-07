@@ -221,6 +221,7 @@ function getProjectData() {
     return {
         version: 1,
         unitSystem,
+        wellMeta: getWellMetadata(),
         fluidDensity: document.getElementById('fluid-density').value,
         muOpenhole: document.getElementById('mu-openhole').value,
         muCased:    document.getElementById('mu-cased').value,
@@ -252,6 +253,9 @@ function getProjectData() {
 
 function applyProjectData(data) {
     if (!data || data.version !== 1) { showError('Неверный формат файла проекта'); return; }
+
+    // Well metadata
+    if (data.wellMeta) applyWellMetadata(data.wellMeta);
 
     // Unit system
     if (data.unitSystem && data.unitSystem !== unitSystem) {
@@ -357,6 +361,7 @@ function newProject() {
     if (_ct) _ct.innerHTML = '';
     updateAssemblySummary();
     setStringModel('soft');
+    applyWellMetadata({ wellField:'', wellName:'', wellBore:'', wellCase:'' });
     document.getElementById('project-saved-label').textContent = '';
     showInfo('Новый проект создан');
 }
@@ -408,9 +413,13 @@ function showProjectList() {
         container.innerHTML = entries.map(([key, proj]) => {
             const dt = new Date(proj.ts);
             const dtStr = dt.toLocaleDateString('ru-RU') + ' ' + dt.toLocaleTimeString('ru-RU', { hour:'2-digit', minute:'2-digit' });
+            const meta = proj.data?.wellMeta || {};
+            const path = [meta.wellField, meta.wellName, meta.wellBore, meta.wellCase]
+                .filter(Boolean).join(' › ');
             return `<div class="project-list-item" onclick="loadProjectByKey('${key}')">
                 <div style="flex:1">
                     <div class="project-list-name">${proj.name}</div>
+                    ${path ? `<div class="project-list-meta" style="color:var(--accent);font-size:10px">${path}</div>` : ''}
                     <div class="project-list-meta">${dtStr}</div>
                 </div>
                 <button class="project-list-del" onclick="event.stopPropagation();deleteProject('${key}')" title="Удалить">×</button>
@@ -1345,7 +1354,7 @@ function getAssemblyData() {
 
         if (!isNaN(len) && !isNaN(weight) && !isNaN(maxLoad)) {
             assembly.push({ name, length: len, weight_air: weight, od,
-                            max_load: maxLoad, weight_per_unit: wtPu, grade });
+                            max_load: maxLoad, linwt: wtPu, grade });
         }
     }
     return assembly;
@@ -2369,6 +2378,18 @@ async function buildTrajectory() {
         state.trajectory = res;
         document.getElementById('viz-results').style.display = '';
 
+        // Show animation controls
+        document.getElementById('btn-animate-rih').style.display = '';
+        document.getElementById('viz-anim-controls').style.display = '';
+
+        // Init slider
+        const slider = document.getElementById('viz-depth-slider');
+        if (slider) { slider.value = 100; _animSliderVal = 100; }
+        const pts = res.points;
+        const maxMD = pts[pts.length - 1]?.md || pts[pts.length - 1]?.depth || 0;
+        const lbl = document.getElementById('viz-depth-label');
+        if (lbl) lbl.textContent = `${fromSI(maxMD, 'depth').toFixed(0)} ${UNITS[unitSystem].depth}`;
+
         // KPI
         document.getElementById('traj-kpi').innerHTML = `
             <div class="stat-card">
@@ -2988,12 +3009,408 @@ function toggleHelp(id) {
 
 
 // ════════════════════════════════════════════════════════════
+// ИЕРАРХИЧЕСКАЯ СТРУКТУРА СКВАЖИНЫ
+// ════════════════════════════════════════════════════════════
+
+function updateWellTree() {
+    const field = document.getElementById('well-field')?.value.trim();
+    const well  = document.getElementById('well-name')?.value.trim();
+    const bore  = document.getElementById('well-bore')?.value.trim();
+    const kase  = document.getElementById('well-case')?.value.trim();
+    const tree  = document.getElementById('well-struct-tree');
+    if (!tree) return;
+
+    const parts = [
+        { label: field || null, icon: '🏭' },
+        { label: well  || null, icon: '🔩' },
+        { label: bore  || null, icon: '🌀' },
+        { label: kase  || null, icon: '📋' },
+    ].filter(p => p.label);
+
+    if (!parts.length) {
+        tree.innerHTML = '<span class="wst-empty">Введите данные структуры выше</span>';
+        return;
+    }
+
+    tree.innerHTML = parts.map((p, i) =>
+        `${i > 0 ? '<span class="wst-sep">›</span>' : ''}` +
+        `<span class="wst-node">${p.icon} ${p.label}</span>`
+    ).join('');
+}
+
+function getWellMetadata() {
+    return {
+        wellField: document.getElementById('well-field')?.value ?? '',
+        wellName:  document.getElementById('well-name')?.value ?? '',
+        wellBore:  document.getElementById('well-bore')?.value ?? '',
+        wellCase:  document.getElementById('well-case')?.value ?? '',
+    };
+}
+
+function applyWellMetadata(meta) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+    set('well-field', meta.wellField);
+    set('well-name',  meta.wellName);
+    set('well-bore',  meta.wellBore);
+    set('well-case',  meta.wellCase);
+    updateWellTree();
+}
+
+
+// ════════════════════════════════════════════════════════════
+// ЦЕМЕНТИРОВАНИЕ ХВОСТОВИКА
+// ════════════════════════════════════════════════════════════
+
+async function calcCementing() {
+    const td = toSI(parseFloat(document.getElementById('cem-target-depth')?.value) || 0, 'depth');
+    const lt = toSI(parseFloat(document.getElementById('cem-liner-top')?.value) || 0, 'depth');
+    if (!td || td <= 0) { showError('Укажите целевую глубину (башмак хвостовика)'); return; }
+    if (!lt || lt <= 0 || lt >= td) { showError('Глубина верха хвостовика должна быть < целевой'); return; }
+
+    const data = collectRequestData(td);
+    if (data.survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
+    if (!data.assembly.length)  { showError('Заполните компоновку'); return; }
+
+    data.liner_top       = lt;
+    data.string_cap_lpm  = parseFloat(document.getElementById('cem-string-cap')?.value) || 6.5;
+    data.annulus_cap_lpm = parseFloat(document.getElementById('cem-annulus-cap')?.value) || 8.0;
+    data.cement_density  = parseFloat(document.getElementById('cem-density')?.value) || 1.85;
+    data.disp_density    = parseFloat(document.getElementById('cem-disp-density')?.value) || 1.20;
+
+    document.getElementById('cem-spinner').style.display = '';
+    document.getElementById('btn-calc-cem').disabled = true;
+    document.getElementById('cem-results').style.display = 'none';
+
+    try {
+        const res = await apiPost('/api/calculate/cementing', data);
+        if (!res.success) { showError(res.error); return; }
+
+        document.getElementById('cem-results').style.display = '';
+
+        // KPI cards
+        document.getElementById('cem-kpi').innerHTML = `
+            <div class="stat-card">
+                <div class="stat-label">До работ (базовый)</div>
+                <div class="stat-value">${res.F_base}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card" style="border-color:var(--danger)">
+                <div class="stat-label">Пик (цемент в колонне)</div>
+                <div class="stat-value" style="color:var(--danger)">${res.F_peak}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Конец работ</div>
+                <div class="stat-value">${res.F_end}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Объём хвостовика</div>
+                <div class="stat-value">${res.V_total_m3}<span class="stat-unit">м³</span></div>
+            </div>`;
+
+        // Chart: hookload vs volume
+        const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+        const bg   = dark ? '#0e0f1a' : '#ffffff';
+        const grid = dark ? '#1e2035' : '#e8eaf6';
+
+        const stageLines = res.stages.map(s => ({
+            type: 'line', xref: 'x', yref: 'paper',
+            x0: s.volume_m3, x1: s.volume_m3, y0: 0, y1: 1,
+            line: { color: '#ffab00', width: 1, dash: 'dot' },
+        }));
+        const stageAnnots = res.stages.map(s => ({
+            x: s.volume_m3, y: 1, xref: 'x', yref: 'paper',
+            text: s.note, showarrow: false, yanchor: 'bottom',
+            font: { size: 10, color: '#ffab00' },
+        }));
+
+        _plot('cem-chart', [{
+            x: res.curve_volume,
+            y: res.curve_hookload,
+            type: 'scatter', mode: 'lines',
+            line: { color: '#3d5afe', width: 2.5 },
+            name: 'Нагрузка на крюке',
+        }], {
+            xaxis: { title: 'Объём закачки (м³)', gridcolor: grid },
+            yaxis: { title: 'Нагрузка на крюке (кН)', gridcolor: grid },
+            shapes: stageLines,
+            annotations: stageAnnots,
+            paper_bgcolor: bg, plot_bgcolor: bg,
+            font: { color: dark ? '#8b8fa8' : '#4a506e' },
+            margin: { t: 20, l: 60, r: 20, b: 50 },
+            height: 300,
+        });
+
+        // Stage table
+        document.getElementById('cem-stages').innerHTML = `
+            <table class="data-table">
+                <thead><tr><th>Стадия</th><th>Объём (м³)</th><th>Нагрузка на крюке (кН)</th></tr></thead>
+                <tbody>
+                    ${res.stages.map(s => `<tr>
+                        <td>${s.name}</td>
+                        <td>${s.volume_m3}</td>
+                        <td><strong>${s.hookload}</strong></td>
+                    </tr>`).join('')}
+                </tbody>
+            </table>`;
+
+    } catch(e) {
+        showError('Ошибка расчёта: ' + e.message);
+    } finally {
+        document.getElementById('cem-spinner').style.display = 'none';
+        document.getElementById('btn-calc-cem').disabled = false;
+    }
+}
+
+
+// ════════════════════════════════════════════════════════════
+// ФЛОТАЦИЯ ОБСАДНОЙ КОЛОННЫ
+// ════════════════════════════════════════════════════════════
+
+async function calcFlotation() {
+    const td = toSI(parseFloat(document.getElementById('flot-target-depth')?.value) || 0, 'depth');
+    if (!td || td <= 0) { showError('Укажите целевую глубину'); return; }
+
+    const data = collectRequestData(td);
+    if (data.survey.length < 2) { showError('Введите минимум 2 точки инклинометрии'); return; }
+    if (!data.assembly.length)  { showError('Заполните компоновку'); return; }
+
+    data.fill_density = parseFloat(document.getElementById('flot-fill-density')?.value) || 0.0013;
+    const rigCapDisp  = parseFloat(document.getElementById('flot-rig-cap')?.value) || 0;
+    data.rig_capacity = rigCapDisp > 0 ? toSI(rigCapDisp, 'force') : 0;
+
+    document.getElementById('flot-spinner').style.display = '';
+    document.getElementById('btn-calc-flot').disabled = true;
+    document.getElementById('flot-results').style.display = 'none';
+
+    try {
+        const res = await apiPost('/api/calculate/flotation', data);
+        if (!res.success) { showError(res.error); return; }
+
+        document.getElementById('flot-results').style.display = '';
+
+        const savPct = res.reduction_pct;
+        const neutral = res.neutral_depth != null
+            ? `${res.neutral_depth} м` : 'Нет (не всплывает)';
+
+        document.getElementById('flot-kpi').innerHTML = `
+            <div class="stat-card">
+                <div class="stat-label">Стандартный hookload</div>
+                <div class="stat-value">${res.F_standard}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card" style="border-color:var(--success)">
+                <div class="stat-label">Флотация hookload</div>
+                <div class="stat-value" style="color:var(--success)">${res.F_flotation}<span class="stat-unit">кН</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Снижение нагрузки</div>
+                <div class="stat-value">${res.reduction_kN}<span class="stat-unit">кН (${savPct}%)</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Нейтральная точка</div>
+                <div class="stat-value" style="font-size:13px">${neutral}</div>
+            </div>`;
+
+        // Chart
+        const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+        const bg   = dark ? '#0e0f1a' : '#ffffff';
+        const grid = dark ? '#1e2035' : '#e8eaf6';
+
+        const traces = [
+            {
+                x: res.f_standard,
+                y: res.depths,
+                type: 'scatter', mode: 'lines',
+                line: { color: '#ff6d00', width: 2, dash: 'dot' },
+                name: 'Стандартный RIH',
+            },
+            {
+                x: res.f_flotation,
+                y: res.depths,
+                type: 'scatter', mode: 'lines',
+                line: { color: '#00c853', width: 2.5 },
+                name: 'Флотация (лёгкая заливка)',
+            },
+        ];
+
+        if (data.rig_capacity > 0) {
+            traces.push({
+                x: [fromSI(data.rig_capacity, 'force'), fromSI(data.rig_capacity, 'force')],
+                y: [res.depths[0], res.depths[res.depths.length - 1]],
+                type: 'scatter', mode: 'lines',
+                line: { color: '#ff1744', width: 1.5, dash: 'dash' },
+                name: 'Грузоподъёмность крюка',
+            });
+        }
+
+        // Zero line
+        traces.push({
+            x: [0, 0],
+            y: [res.depths[0], res.depths[res.depths.length - 1]],
+            type: 'scatter', mode: 'lines',
+            line: { color: '#8b8fa8', width: 1, dash: 'dot' },
+            name: 'Нулевая нагрузка',
+            showlegend: false,
+        });
+
+        _plot('flot-chart', traces, {
+            xaxis: { title: `Нагрузка на крюке (${UNITS[unitSystem].force})`, gridcolor: grid, zeroline: true },
+            yaxis: { autorange: 'reversed', title: `Глубина MD (${UNITS[unitSystem].depth})`, gridcolor: grid },
+            paper_bgcolor: bg, plot_bgcolor: bg,
+            font: { color: dark ? '#8b8fa8' : '#4a506e' },
+            legend: { orientation: 'h', x: 0, y: 1.1 },
+            margin: { t: 30, l: 60, r: 20, b: 50 },
+            height: 420,
+        });
+
+    } catch(e) {
+        showError('Ошибка расчёта: ' + e.message);
+    } finally {
+        document.getElementById('flot-spinner').style.display = 'none';
+        document.getElementById('btn-calc-flot').disabled = false;
+    }
+}
+
+
+// ════════════════════════════════════════════════════════════
+// АНИМАЦИЯ СПУСКА (3D ВИЗУАЛИЗАЦИЯ)
+// ════════════════════════════════════════════════════════════
+
+let _animTimer = null;
+let _animSliderVal = 100;
+
+function onVizDepthSlider(val) {
+    _animSliderVal = parseInt(val);
+    if (!_vizData) return;
+
+    const pts = _vizData.points;
+    const maxMD = pts[pts.length - 1]?.md || pts[pts.length - 1]?.depth || 0;
+    const currentMD = maxMD * _animSliderVal / 100;
+
+    document.getElementById('viz-depth-label').textContent =
+        `${fromSI(currentMD, 'depth').toFixed(0)} ${UNITS[unitSystem].depth}`;
+
+    // Find slice of trajectory up to currentMD
+    const slicePts = pts.filter(p => (p.md || p.depth || 0) <= currentMD + 1);
+    if (!slicePts.length) return;
+
+    // Get T&D forces if available
+    const tdRes = state.results?.torqueDrag;
+    const forceAtDepth = tdRes ? (depth) => {
+        const fs = tdRes.forces_rih;
+        if (!fs || !fs.length) return null;
+        // Interpolate axial force from RIH profile (depth is MD from surface)
+        const sorted = [...fs].sort((a, b) => a.depth - b.depth);
+        for (let i = 1; i < sorted.length; i++) {
+            if (sorted[i].depth >= depth) {
+                const t = (depth - sorted[i-1].depth) / (sorted[i].depth - sorted[i-1].depth);
+                return sorted[i-1].force + t * (sorted[i].force - sorted[i-1].force);
+            }
+        }
+        return sorted[sorted.length - 1]?.force ?? null;
+    } : null;
+
+    // Color by force if available, else by inclination
+    let colors;
+    if (forceAtDepth) {
+        colors = slicePts.map(p => forceAtDepth(p.md || p.depth || 0));
+    } else {
+        colors = slicePts.map(p => p.inc);
+    }
+
+    const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+    const bg3 = dark ? '#0a0b12' : '#f4f6fb';
+    const grid3 = dark ? '#1e2035' : '#d5daf0';
+    const txt3  = dark ? '#8b8fa8' : '#4a506e';
+
+    // Full wellbore (faint)
+    const trFull = {
+        x: pts.map(p => p.east),
+        y: pts.map(p => p.north),
+        z: pts.map(p => -p.tvd),
+        type: 'scatter3d', mode: 'lines',
+        line: { color: dark ? '#2a2d45' : '#c5cae9', width: 3 },
+        name: 'Плановая трасса',
+        showlegend: false,
+    };
+
+    // String at current depth
+    const trStr = {
+        x: slicePts.map(p => p.east),
+        y: slicePts.map(p => p.north),
+        z: slicePts.map(p => -p.tvd),
+        type: 'scatter3d', mode: 'lines+markers',
+        line: {
+            color: colors,
+            colorscale: forceAtDepth ? 'RdYlGn' : 'Viridis',
+            width: 6,
+            reversescale: forceAtDepth ? true : false,
+        },
+        marker: { size: 2 },
+        name: 'Инструмент',
+    };
+
+    // Bit position marker
+    const last = slicePts[slicePts.length - 1];
+    const trBit = {
+        x: [last.east], y: [last.north], z: [-last.tvd],
+        type: 'scatter3d', mode: 'markers',
+        marker: { size: 8, color: '#ff1744', symbol: 'cross' },
+        name: 'Долото',
+    };
+
+    _plot('viz-3d', [trFull, trStr, trBit], {
+        scene: {
+            bgcolor: bg3,
+            xaxis: { title: 'Восток (м)', gridcolor: grid3, tickfont: { color: txt3 } },
+            yaxis: { title: 'Север (м)',  gridcolor: grid3, tickfont: { color: txt3 } },
+            zaxis: { title: 'TVD (м)',    gridcolor: grid3, tickfont: { color: txt3 } },
+            camera: { eye: { x: 1.5, y: 1.5, z: 0.8 } },
+        },
+        paper_bgcolor: bg3,
+        margin: { l: 0, r: 0, t: 0, b: 0 },
+        height: 520,
+        legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(0,0,0,0.3)', font: { color: '#fff', size: 10 } },
+    }, { scrollZoom: true });
+}
+
+function animateRIH() {
+    if (_animTimer) {
+        clearInterval(_animTimer);
+        _animTimer = null;
+        document.getElementById('btn-animate-rih').textContent = '▶ Анимация спуска';
+        return;
+    }
+
+    // Switch to 3D tab for animation
+    switchVizTab('3d');
+    const slider = document.getElementById('viz-depth-slider');
+    if (!slider) return;
+
+    slider.value = 0;
+    _animSliderVal = 0;
+    document.getElementById('btn-animate-rih').textContent = '⏹ Остановить';
+
+    _animTimer = setInterval(() => {
+        _animSliderVal = Math.min(100, _animSliderVal + 1);
+        slider.value = _animSliderVal;
+        onVizDepthSlider(_animSliderVal);
+        if (_animSliderVal >= 100) {
+            clearInterval(_animTimer);
+            _animTimer = null;
+            document.getElementById('btn-animate-rih').textContent = '▶ Анимация спуска';
+        }
+    }, 80);
+}
+
+
+// ════════════════════════════════════════════════════════════
 // ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ
 // ════════════════════════════════════════════════════════════
 
 document.addEventListener('DOMContentLoaded', function initApp() {
     // API 5CT table
     filterApi5ct();
+    // Well structure tree
+    updateWellTree();
     // Restore last saved session
     try { restoreLastSession(); } catch (e) { /* ignore */ }
     // Start auto-save

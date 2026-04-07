@@ -1202,6 +1202,233 @@ def calibrate_friction():
         return jsonify(success=False, error=f"Ошибка калибровки: {e}")
 
 
+# ════════════════════════════════════════════════════════════
+# ЦЕМЕНТИРОВАНИЕ ХВОСТОВИКА
+# ════════════════════════════════════════════════════════════
+
+@app.route('/api/calculate/cementing', methods=['POST'])
+def calc_cementing():
+    """
+    Расчёт нагрузки на крюке при цементировании хвостовика.
+
+    Модель: непрерывная кривая hookload vs объём закачки.
+    Стадии:
+      1. До работ (весь ствол — буровой раствор): F = F_base
+      2. Цемент заполняет колонну (тяжелее раствора) → нагрузка ↑
+      3. Цемент выходит из башмака, заполняет КП → нагрузка ↓ из-за эффекта выталкивания
+      4. Продавка завершена — цемент полностью в КП: F = F_base + net_cement_weight
+    """
+    try:
+        data = request.get_json()
+        survey        = data['survey']
+        assembly      = data['assembly']
+        target_depth  = float(data['target_depth'])
+        fluid_density = float(data['fluid_density'])
+        mu_default    = float(data.get('mu_default', 0.25))
+        mu_intervals  = data.get('mu_intervals', [])
+        centralizers  = data.get('centralizers', [])
+
+        liner_top       = float(data['liner_top'])
+        liner_shoe      = target_depth  # башмак хвостовика = целевая глубина
+        string_cap_lpm  = float(data.get('string_cap_lpm', 6.5))   # л/м колонны
+        annulus_cap_lpm = float(data.get('annulus_cap_lpm', 8.0))   # л/м КП хвостовика
+        cement_density  = float(data.get('cement_density', 1.85))   # г/см³
+        disp_density    = float(data.get('disp_density', fluid_density))  # г/см³
+
+        validate_survey(survey)
+        validate_assembly(assembly)
+
+        liner_length = liner_shoe - liner_top
+        if liner_length <= 0:
+            raise ValueError("Глубина верха хвостовика должна быть меньше целевой глубины")
+
+        # Базовая нагрузка на крюке (спуск, трение = 0, только вес в растворе)
+        forces_base, _ = johancsik_run(
+            assembly, survey, target_depth, fluid_density,
+            0.0, [], direction='down', centralizers=centralizers)
+        F_base = forces_base[-1]['force'] if forces_base else 0.0
+
+        # Объёмы (литры)
+        V_string = string_cap_lpm * liner_shoe        # всё бурильное до башмака
+        V_liner_ann = annulus_cap_lpm * liner_length  # КП хвостовика
+
+        V_total = V_string + V_liner_ann
+
+        # Кривая: нагрузка vs объём закачки (м³ для читаемости)
+        N_pts = 80
+        curve_v, curve_f = [], []
+        for i in range(N_pts + 1):
+            V = V_total * i / N_pts
+
+            # Цемент в колонне (увеличивает нагрузку)
+            v_cem_str = min(V, V_string)
+            # Цемент в КП хвостовика (уменьшает нагрузку — выталкивает хвостовик)
+            v_cem_ann = min(max(0.0, V - V_string), V_liner_ann)
+
+            # ΔF_string: цемент тяжелее раствора → бурильная колонна тяжелее
+            dF_str = (cement_density - fluid_density) * v_cem_str * G / 1000.0   # кН
+
+            # ΔF_ann: цемент в КП тяжелее раствора → гидростатика давит вверх
+            #         (хвостовик выталкивается, снимая нагрузку с бурильной колонны)
+            dF_ann = -(cement_density - fluid_density) * v_cem_ann * G / 1000.0  # кН
+
+            F = F_base + dF_str + dF_ann
+            curve_v.append(round(V / 1000.0, 3))   # м³
+            curve_f.append(round(F, 2))
+
+        # Ключевые точки
+        F_pre   = round(F_base, 2)
+        F_peak  = round(F_base + (cement_density - fluid_density) * V_string * G / 1000.0, 2)
+        F_end_pump = round(F_base + (cement_density - fluid_density) * (V_string - V_liner_ann) * G / 1000.0, 2)
+
+        # Сравнение: продавочная жидкость vs цемент в колонне
+        v_disp_start = V_string + V_liner_ann
+        v_disp_str = min(V_total, V_string)
+
+        stages = [
+            {'name': 'До работ (весь ствол — буровой раствор)', 'volume_m3': 0.0,
+             'hookload': F_pre, 'note': 'Базовый'},
+            {'name': 'Цемент заполнил колонну (пик нагрузки)', 'volume_m3': round(V_string / 1000.0, 3),
+             'hookload': F_peak, 'note': 'Максимум'},
+            {'name': 'Цемент полностью в КП (продавка завершена)', 'volume_m3': round(V_total / 1000.0, 3),
+             'hookload': F_end_pump, 'note': 'Конец работ'},
+        ]
+
+        return jsonify(
+            success=True,
+            F_base=F_pre,
+            F_peak=F_peak,
+            F_end=F_end_pump,
+            V_string_m3=round(V_string / 1000.0, 3),
+            V_liner_ann_m3=round(V_liner_ann / 1000.0, 3),
+            V_total_m3=round(V_total / 1000.0, 3),
+            liner_length=round(liner_length, 1),
+            curve_volume=curve_v,
+            curve_hookload=curve_f,
+            stages=stages,
+        )
+    except (ValueError, KeyError) as e:
+        return jsonify(success=False, error=str(e))
+    except Exception as e:
+        return jsonify(success=False, error=f'Ошибка цементирования: {e}')
+
+
+# ════════════════════════════════════════════════════════════
+# ФЛОТАЦИЯ ОБСАДНОЙ КОЛОННЫ
+# ════════════════════════════════════════════════════════════
+
+@app.route('/api/calculate/flotation', methods=['POST'])
+def calc_flotation():
+    """
+    Флотация обсадной колонны: спуск с заглушённым башмаком (воздух/лёгкая жидкость внутри).
+
+    Физика: давление бурового раствора снаружи > давление лёгкой заливки внутри →
+    дополнительная выталкивающая сила = (ρ_mud - ρ_fill) × g × V_internal.
+    """
+    try:
+        data = request.get_json()
+        survey        = data['survey']
+        assembly      = data['assembly']
+        target_depth  = float(data['target_depth'])
+        fluid_density = float(data['fluid_density'])
+        mu_default    = float(data.get('mu_default', 0.25))
+        mu_intervals  = data.get('mu_intervals', [])
+        centralizers  = data.get('centralizers', [])
+        fill_density  = float(data.get('fill_density', 0.0013))   # г/см³ (воздух по умолчанию)
+        rig_capacity  = float(data.get('rig_capacity', 0.0))       # кН (0 = не задан)
+
+        validate_survey(survey)
+        validate_assembly(assembly)
+
+        # Стандартный спуск (буровой раствор внутри и снаружи)
+        forces_std, segs_std = johancsik_run(
+            assembly, survey, target_depth, fluid_density,
+            mu_default, mu_intervals, direction='down', centralizers=centralizers)
+
+        # Флотация: модифицируем assembly — уменьшаем эффективный вес за счёт внутренней заливки
+        BF = 1.0 - fluid_density / STEEL_DENSITY
+        rho_steel_kgm3 = STEEL_DENSITY * 1000.0  # г/см³ → кг/м³
+
+        flotation_assembly = []
+        total_inner_vol_m3 = 0.0
+        for elem in assembly:
+            od_m    = elem.get('od', 127.0) / 1000.0     # мм → м
+            linwt   = elem.get('linwt', elem['weight_air'] / max(elem['length'], 0.001))  # кг/м
+            A_ext   = math.pi / 4.0 * od_m ** 2           # м²
+            A_metal = linwt / rho_steel_kgm3               # м²
+            A_int   = max(0.0, A_ext - A_metal)            # м² внутренний просвет
+
+            total_inner_vol_m3 += A_int * elem['length']
+
+            # Доп. подъёмная сила от заливки (кН)
+            extra_buoy_kN = (fluid_density - fill_density) * 1000.0 * G * A_int * elem['length'] / 1000.0
+
+            # Корректируем weight_air так, чтобы johancsik дал правильную W_b
+            # johancsik: W_b = weight_air × BF × G / 1000
+            # Нам нужно: W_b_float = W_b_std - extra_buoy_kN
+            # ⇒ weight_air_mod = weight_air - extra_buoy_kN × 1000 / (BF × G)
+            if BF > 0:
+                W_air_mod = elem['weight_air'] - extra_buoy_kN * 1000.0 / (BF * G)
+            else:
+                W_air_mod = elem['weight_air']
+            W_air_mod = max(0.0, W_air_mod)
+
+            flotation_assembly.append({**elem, 'weight_air': W_air_mod})
+
+        forces_flot, _ = johancsik_run(
+            flotation_assembly, survey, target_depth, fluid_density,
+            mu_default, mu_intervals, direction='down', centralizers=centralizers)
+
+        F_std  = forces_std[-1]['force']  if forces_std  else 0.0
+        F_flot = forces_flot[-1]['force'] if forces_flot else 0.0
+        reduction_kN  = round(F_std - F_flot, 2)
+        reduction_pct = round(reduction_kN / abs(F_std) * 100, 1) if F_std else 0.0
+
+        # Профили по глубине
+        depths     = [f['depth'] for f in forces_std]
+        f_std_list = [round(f['force'], 2) for f in forces_std]
+        f_flot_list= [round(f['force'], 2) for f in forces_flot]
+
+        # Нейтральная точка флотации (где нагрузка → 0)
+        neutral_depth = None
+        for fp in forces_flot:
+            if fp['force'] <= 0:
+                neutral_depth = round(fp['depth'], 1)
+                break
+
+        # Максимальная глубина при ограничении крюком
+        max_depth_std  = target_depth
+        max_depth_flot = target_depth
+        if rig_capacity > 0:
+            for fp in forces_std:
+                if fp['force'] > rig_capacity:
+                    max_depth_std = round(fp['depth'], 1)
+                    break
+            for fp in forces_flot:
+                if fp['force'] > rig_capacity:
+                    max_depth_flot = round(fp['depth'], 1)
+                    break
+
+        return jsonify(
+            success=True,
+            F_standard=round(F_std, 2),
+            F_flotation=round(F_flot, 2),
+            reduction_kN=reduction_kN,
+            reduction_pct=reduction_pct,
+            total_inner_vol_m3=round(total_inner_vol_m3, 4),
+            neutral_depth=neutral_depth,
+            max_depth_std=max_depth_std,
+            max_depth_flot=max_depth_flot,
+            depths=depths,
+            f_standard=f_std_list,
+            f_flotation=f_flot_list,
+        )
+    except (ValueError, KeyError) as e:
+        return jsonify(success=False, error=str(e))
+    except Exception as e:
+        return jsonify(success=False, error=f'Ошибка расчёта флотации: {e}')
+
+
 @app.route('/api/export/pdf', methods=['POST'])
 def export_pdf():
     """Полный PDF-отчёт: входные данные + Torque & Drag + доходимость + пакер."""
