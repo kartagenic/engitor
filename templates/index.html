@@ -471,7 +471,6 @@
                                         <th style="width:36px">№</th>
                                         <th style="min-width:130px">Название элемента</th>
                                         <th>Длина (<span class="unit-lbl" data-unit="depth">м</span>)</th>
-                                        <th>Вес (<span class="unit-lbl" data-unit="weight">кг</span>)</th>
                                         <th>OD (<span class="unit-lbl" data-unit="od">мм</span>)</th>
                                         <th title="Внутренний диаметр — обязателен для гидравлики">ID (<span class="unit-lbl" data-unit="od">мм</span>)</th>
                                         <th>Лин. вес (<span class="unit-lbl" data-unit="linwt">кг/м</span>)</th>
@@ -655,9 +654,9 @@
                         <div class="accordion-body">
                             <div class="form-row cols-3">
                                 <div class="form-group">
-                                    <label class="form-label">Усилие посадки пакера (кН)</label>
+                                    <label class="form-label">Усилие срыва пакера (<span class="unit-lbl" data-unit="force">кН</span>)</label>
                                     <input type="number" class="form-input" id="packer-set-force"
-                                           placeholder="50" step="1" min="0">
+                                           placeholder="50" step="1" min="0" data-unit-type="force">
                                 </div>
                                 <div class="form-group">
                                     <label class="form-label">Элемент-пакер</label>
@@ -666,7 +665,7 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
-                                    <label class="form-label">Целевая глубина (<span class="unit-lbl" data-unit="depth">м</span>)</label>
+                                    <label class="form-label">Глубина пакера, MD (<span class="unit-lbl" data-unit="depth">м</span>)</label>
                                     <input type="number" class="form-input" id="packer-target-depth"
                                            placeholder="3000" step="1" min="0" data-unit-type="depth">
                                 </div>
@@ -710,12 +709,12 @@
                                            placeholder="3000" step="1" min="0" data-unit-type="depth">
                                 </div>
                                 <div class="form-group">
-                                    <label class="form-label">μ минимальный</label>
+                                    <label class="form-label" title="Коэффициент трения μ (мю) — безразмерный. Диапазон 0.15–0.30 для бурового раствора, 0.25–0.40 для необсаженного ствола">μ мин. (коэф. трения)</label>
                                     <input type="number" class="form-input" id="hook-mu-min"
                                            value="0.15" step="0.01" min="0.05" max="0.8">
                                 </div>
                                 <div class="form-group">
-                                    <label class="form-label">μ максимальный</label>
+                                    <label class="form-label" title="Коэффициент трения μ (мю) — максимальное значение для построения верхней границы диапазона нагрузок">μ макс. (коэф. трения)</label>
                                     <input type="number" class="form-input" id="hook-mu-max"
                                            value="0.30" step="0.01" min="0.05" max="0.8">
                                 </div>

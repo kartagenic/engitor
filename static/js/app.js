@@ -75,13 +75,13 @@ function convertInputValues() {
     const asmRows = document.getElementById('assembly-tbody').rows;
     for (const row of asmRows) {
         const inputs = row.querySelectorAll('input[type="number"]');
-        // [0]=len, [1]=weight, [2]=od, [3]=id(mm→no unit convert needed), [4]=linwt, [5]=maxLoad
-        const types = ['depth', 'weight', 'od', null, 'linwt', 'force'];
+        // [0]=len, [1]=od, [2]=id(mm→no convert), [3]=linwt, [4]=maxLoad
+        const types = ['depth', 'od', null, 'linwt', 'force'];
         inputs.forEach((inp, i) => {
             const type = types[i];
             if (!type) return;
             // Don't convert auto-calculated maxLoad — recalculate it instead
-            if (i === 5 && inp.dataset.auto === 'true') { inp.value = ''; return; }
+            if (i === 4 && inp.dataset.auto === 'true') { inp.value = ''; return; }
             const val = parseFloat(inp.value);
             if (!isNaN(val) && val !== 0) {
                 if (unitSystem === 'field') {
@@ -193,9 +193,9 @@ function getProjectData() {
         const conn  = tr.querySelector('select.conn-sel')?.value ?? '';
         assembly.push({
             name,
-            len: nums[0]?.value, weight: nums[1]?.value,
-            od: nums[2]?.value, id_mm: nums[3]?.value,
-            linwt: nums[4]?.value, maxLoad: nums[5]?.value,
+            len: nums[0]?.value,
+            od: nums[1]?.value, id_mm: nums[2]?.value,
+            linwt: nums[3]?.value, maxLoad: nums[4]?.value,
             grade, conn,
         });
     });
@@ -316,7 +316,7 @@ function applyProjectData(data) {
     // Assembly
     document.getElementById('assembly-tbody').innerHTML = '';
     (data.assembly || []).forEach(a => {
-        makeAssemblyRow(a.name, a.len, a.weight, a.od, a.maxLoad, a.linwt, a.grade, a.conn, a.id_mm);
+        makeAssemblyRow(a.name, a.len, a.od, a.maxLoad, a.linwt, a.grade, a.conn, a.id_mm);
     });
     updateAssemblySummary();
 
@@ -1064,11 +1064,10 @@ function saveBhaTemplate() {
         rows.push({
             name:    nameEl?.value ?? '',
             len:     nums[0]?.value ?? '',
-            weight:  nums[1]?.value ?? '',
-            od:      nums[2]?.value ?? '',
-            id_mm:   nums[3]?.value ?? '',
-            linwt:   nums[4]?.value ?? '',
-            maxLoad: nums[5]?.value ?? '',
+            od:      nums[1]?.value ?? '',
+            id_mm:   nums[2]?.value ?? '',
+            linwt:   nums[3]?.value ?? '',
+            maxLoad: nums[4]?.value ?? '',
             grade:   tr.querySelector('select.grade-sel')?.value ?? '',
             conn:    tr.querySelector('select.conn-sel')?.value ?? '',
         });
@@ -1130,7 +1129,7 @@ function loadBhaTemplate(key) {
 
     // If template was saved in a different unit system, display values as-is (stored in display units at save time)
     tpl.rows.forEach(r => {
-        makeAssemblyRow(r.name, r.len, r.weight, r.od, r.maxLoad, r.linwt, r.grade, r.conn);
+        makeAssemblyRow(r.name, r.len, r.od, r.maxLoad, r.linwt, r.grade, r.conn);
     });
 
     renumberRows('assembly-tbody');
@@ -1245,11 +1244,11 @@ function autoCalcMaxLoad(tr) {
     const numInputs = tr.querySelectorAll('input[type="number"]');
     const gradeEl   = tr.querySelector('select.grade-sel');
     const connEl    = tr.querySelector('select.conn-sel');
-    const maxInp    = numInputs[5];
+    const maxInp    = numInputs[4];
     if (!maxInp || !gradeEl || !connEl) return;
 
-    const odDisp    = parseFloat(numInputs[2].value);
-    const linwtDisp = parseFloat(numInputs[4].value);
+    const odDisp    = parseFloat(numInputs[1].value);
+    const linwtDisp = parseFloat(numInputs[3].value);
     const grade     = gradeEl.value;
     const conn      = connEl.value;
 
@@ -1265,7 +1264,7 @@ function autoCalcMaxLoad(tr) {
     updateAssemblySummary();
 }
 
-function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit, grade, conn, id_mm) {
+function makeAssemblyRow(name, len, od, maxLoad, wtPerUnit, grade, conn, id_mm) {
     const tbody = document.getElementById('assembly-tbody');
     const idx = tbody.rows.length + 1;
     const gradeVal = grade ?? '';
@@ -1275,7 +1274,6 @@ function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit, grade, conn,
         <td class="row-num">${idx}</td>
         <td><input type="text" value="${name ?? ''}" placeholder="Элемент"></td>
         <td><input type="number" step="any" value="${len ?? ''}" placeholder="0"></td>
-        <td><input type="number" step="any" value="${weight ?? ''}" placeholder="0"></td>
         <td><input type="number" step="any" value="${od ?? ''}" placeholder="0" class="od-inp"></td>
         <td><input type="number" step="any" value="${id_mm ?? ''}" placeholder="авто" title="Внутренний диаметр трубы (мм)" class="id-inp"></td>
         <td><input type="number" step="any" value="${wtPerUnit ?? ''}" placeholder="0"></td>
@@ -1305,39 +1303,26 @@ function makeAssemblyRow(name, len, weight, od, maxLoad, wtPerUnit, grade, conn,
     if (gradeVal) gradeEl.value = gradeVal;
     connEl.value = connVal;
 
-    // Numeric inputs
+    // Numeric inputs: [0]=len, [1]=od, [2]=id, [3]=linwt, [4]=maxLoad
     const inputs = tr.querySelectorAll('input[type="number"]');
-    const lenInp    = inputs[0];
-    const weightInp = inputs[1];
-    const odInp     = inputs[2];
-    // inputs[3] is the ID column added later; linwt is at index 4
-    const wtPuInp   = inputs[4];
-
-    // Auto-weight from linwt × length
-    const recalcWeight = () => {
-        const l   = parseFloat(lenInp.value);
-        const w   = parseFloat(weightInp.value);
-        const wpu = parseFloat(wtPuInp.value);
-        if (!isNaN(l) && !isNaN(wpu) && (isNaN(w) || w === 0)) {
-            weightInp.value = (l * wpu).toFixed(1);
-        }
-        updateAssemblySummary();
-    };
-    lenInp.addEventListener('input', recalcWeight);
-    wtPuInp.addEventListener('input', recalcWeight);
+    const lenInp  = inputs[0];
+    const odInp   = inputs[1];
+    const wtPuInp = inputs[3];
 
     // Auto-maxLoad from OD + linwt + grade + conn
     const recalcMax = () => autoCalcMaxLoad(tr);
-    odInp.addEventListener('input',   recalcMax);
-    wtPuInp.addEventListener('input', recalcMax);
+    odInp.addEventListener('input',    recalcMax);
+    wtPuInp.addEventListener('input',  recalcMax);
     gradeEl.addEventListener('change', recalcMax);
     connEl.addEventListener('change',  recalcMax);
+    lenInp.addEventListener('input',   () => updateAssemblySummary());
+    wtPuInp.addEventListener('input',  () => updateAssemblySummary());
 
     // Trigger on initial value (e.g. when loading sample)
     if (gradeVal && connVal && od && wtPerUnit) recalcMax();
 }
 
-function addAssemblyRow() { makeAssemblyRow('', '', '', '', '', '', '', 'BTC', ''); }
+function addAssemblyRow() { makeAssemblyRow('', '', '', '', '', '', 'BTC', ''); }
 
 function removeAssemblyRow() {
     const tbody = document.getElementById('assembly-tbody');
@@ -1368,11 +1353,10 @@ function getAssemblyData() {
 
         const name    = textInputs[0]?.value || `Элемент ${assembly.length + 1}`;
         const lenRaw  = parseFloat(numInputs[0]?.value);
-        const weightRaw = parseFloat(numInputs[1]?.value);
-        const odRaw   = parseFloat(numInputs[2]?.value) || 0;
-        const idRaw   = parseFloat(numInputs[3]?.value) || 0;   // NEW: inner diameter
-        const wtPuRaw = parseFloat(numInputs[4]?.value) || 0;
-        let maxLoadRaw = parseFloat(numInputs[5]?.value);
+        const odRaw   = parseFloat(numInputs[1]?.value) || 0;
+        const idRaw   = parseFloat(numInputs[2]?.value) || 0;
+        const wtPuRaw = parseFloat(numInputs[3]?.value) || 0;
+        let maxLoadRaw = parseFloat(numInputs[4]?.value);
         const grade   = gradeEl?.value || '';
         const conn    = connEl?.value  || 'BTC';
 
@@ -1383,25 +1367,17 @@ function getAssemblyData() {
         }
 
         // Convert to SI
-        const len     = isNaN(lenRaw)     ? NaN : toSI(lenRaw, 'depth');
+        const len     = isNaN(lenRaw) ? NaN : toSI(lenRaw, 'depth');
         const od      = toSI(odRaw, 'od');
-        // ID: use entered value, or estimate as OD - 2×wall_thickness
-        // wall_thickness ≈ linwt/(π × OD × ρ_steel) — simplified: id ≈ 0.80×OD for drill pipe
         const id_raw_si = idRaw > 0 ? toSI(idRaw, 'od')
                         : (odRaw > 0 ? toSI(odRaw * 0.80, 'od') : 0.08);
         const wtPu    = toSI(wtPuRaw, 'linwt');
         const maxLoad = isNaN(maxLoadRaw) ? NaN : toSI(maxLoadRaw, 'force');
 
-        let weight;
-        if (!isNaN(weightRaw) && weightRaw > 0) {
-            weight = toSI(weightRaw, 'weight');
-        } else if (wtPu > 0 && !isNaN(len)) {
-            weight = wtPu * len;
-        } else {
-            weight = isNaN(weightRaw) ? NaN : 0;
-        }
+        // Weight always derived from linwt × length
+        const weight  = (wtPu > 0 && !isNaN(len)) ? wtPu * len : 0;
 
-        if (!isNaN(len) && !isNaN(weight) && !isNaN(maxLoad)) {
+        if (!isNaN(len) && !isNaN(maxLoad)) {
             assembly.push({ name, length: len, weight_air: weight, od,
                             id: id_raw_si, max_load: maxLoad, linwt: wtPu, grade });
         }
@@ -1463,16 +1439,16 @@ function updateAssemblySummary() {
 
 function loadSampleAssembly() {
     document.getElementById('assembly-tbody').innerHTML = '';
-    // [name, len(m), weight(kg), od(mm), maxLoad(kN), wtPerUnit(kg/m), grade, conn]
+    // [name, len(m), od(mm), maxLoad(kN), wtPerUnit(kg/m), grade, conn]
     // maxLoad=null → will be auto-calculated from grade+OD+linwt
     const sample = [
-        ['Долото PDC 215.9 мм', 0.3,  45,    215.9, null, 223.2, '',     'BTC'],
-        ['Забойный двигатель',  9.5,  1800,  172,   800,  283.0, '',     'BTC'],
-        ['КНБК (немагнитная)',  9.0,  450,   171,   null, 74.4,  'N80-1','BTC'],
-        ['УБТ 178×71',          54,   8640,  178,   null, 238.1, 'S-135','Drill-TJ'],
-        ['Бурильные трубы 127×9.19', 2900, null, 127, null, 34.2, 'G-105','Drill-TJ'],
+        ['Долото PDC 215.9 мм', 0.3,  215.9, null, 223.2, '',     'BTC'],
+        ['Забойный двигатель',  9.5,  172,   800,  283.0, '',     'BTC'],
+        ['КНБК (немагнитная)',  9.0,  171,   null, 74.4,  'N80-1','BTC'],
+        ['УБТ 178×71',          54,   178,   null, 238.1, 'S-135','Drill-TJ'],
+        ['Бурильные трубы 127×9.19', 2900, 127, null, 34.2, 'G-105','Drill-TJ'],
     ];
-    sample.forEach(s => makeAssemblyRow(s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]));
+    sample.forEach(s => makeAssemblyRow(s[0], s[1], s[2], s[3], s[4], s[5], s[6]));
     updateAssemblySummary();
 }
 
@@ -3519,14 +3495,13 @@ function addApi5ctToAssembly() {
     const maxLoad = parseFloat(calc.F_thread);
 
     // Display in current unit system
-    const lenDisp    = fromSI(lenSI, 'depth');
-    const weightDisp = fromSI(weight, 'weight');
-    const odDisp     = fromSI(od_mm, 'od');
-    const wtPuDisp   = fromSI(wt_kgm, 'linwt');
+    const lenDisp     = fromSI(lenSI, 'depth');
+    const odDisp      = fromSI(od_mm, 'od');
+    const wtPuDisp    = fromSI(wt_kgm, 'linwt');
     const maxLoadDisp = fromSI(maxLoad, 'force');
 
-    makeAssemblyRow(name, lenDisp.toFixed(2), weightDisp.toFixed(1),
-                    odDisp.toFixed(2), maxLoadDisp.toFixed(1), wtPuDisp.toFixed(2));
+    makeAssemblyRow(name, lenDisp.toFixed(2), odDisp.toFixed(2),
+                    maxLoadDisp.toFixed(1), wtPuDisp.toFixed(2));
     renumberRows('assembly-tbody');
     updateAssemblySummary();
     // Clear form
