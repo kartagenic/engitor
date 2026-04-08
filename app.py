@@ -1174,6 +1174,92 @@ def calc_swab_surge():
         return jsonify(success=False, error=f"Ошибка Свэб/Сёрж: {e}")
 
 
+def _detect_col(header: str) -> str | None:
+    """Return 'depth'|'inclination'|'azimuth' for a known header string, else None."""
+    cl = header.strip().replace('\n', ' ').lower()
+    if any(k in cl for k in ('глубина по стволу', 'measured depth', 'глубина', 'depth', ' md')):
+        return 'depth'
+    if any(k in cl for k in ('зенитный', 'inclin', 'incl')):
+        return 'inclination'
+    # Prefer grid/cartographic azimuth over geographic if both present
+    if any(k in cl for k in ('азимут картографический', 'азимут грид', 'азимут (грид)',
+                              'grid azimuth', 'азимут', 'azimuth', 'azim', 'azi')):
+        return 'azimuth'
+    return None
+
+
+def _survey_from_df(df) -> list | None:
+    """Extract depth/inclination/azimuth from a pandas DataFrame. Returns list or None."""
+    col_map = {}
+    for col in df.columns:
+        if not isinstance(col, str):
+            continue
+        key = _detect_col(col)
+        if key and key not in col_map:
+            col_map[key] = col
+    if len(col_map) < 3:
+        return None
+    rows = []
+    for _, row in df.iterrows():
+        try:
+            rows.append({
+                'depth':       float(row[col_map['depth']]),
+                'inclination': float(row[col_map['inclination']]),
+                'azimuth':     float(row[col_map['azimuth']]),
+            })
+        except (ValueError, TypeError):
+            continue  # skip non-numeric rows (e.g. sub-headers)
+    return rows or None
+
+
+def _parse_wellplan_excel(file_obj) -> list | None:
+    """
+    Parse a WellPlan/WellView-style survey Excel where the real header row
+    is buried below several rows of well metadata (e.g. DOX export format).
+    Scans for a row containing 'Глубина по стволу' / 'Measured Depth', then
+    extracts depth/inclination/grid-azimuth from the rows that follow.
+    """
+    wb = openpyxl.load_workbook(file_obj, data_only=True, read_only=True)
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    header_idx = col_depth = col_inc = col_az = None
+
+    for i, row in enumerate(all_rows):
+        for j, cell in enumerate(row):
+            if not isinstance(cell, str):
+                continue
+            # Trigger only on the specific "по стволу" phrase to avoid metadata rows
+            if _detect_col(cell) == 'depth' and ('стволу' in cell.lower() or
+                                                   'measured depth' in cell.lower()):
+                header_idx = i
+                for jj, hcell in enumerate(row):
+                    if not isinstance(hcell, str):
+                        continue
+                    k = _detect_col(hcell)
+                    if   k == 'depth'        and col_depth is None: col_depth = jj
+                    elif k == 'inclination'  and col_inc   is None: col_inc   = jj
+                    elif k == 'azimuth'      and col_az    is None: col_az    = jj
+                break
+        if header_idx is not None:
+            break
+
+    if header_idx is None or None in (col_depth, col_inc, col_az):
+        return None
+
+    rows = []
+    for row in all_rows[header_idx + 1:]:
+        md  = row[col_depth] if col_depth < len(row) else None
+        inc = row[col_inc]   if col_inc   < len(row) else None
+        az  = row[col_az]    if col_az    < len(row) else None
+        if not isinstance(md,  (int, float)): continue
+        if not isinstance(inc, (int, float)): continue
+        if not isinstance(az,  (int, float)): continue
+        rows.append({'depth': float(md), 'inclination': float(inc), 'azimuth': float(az)})
+    return rows or None
+
+
 @app.route('/api/survey/upload', methods=['POST'])
 def upload_survey():
     """Загрузка инклинометрии из CSV / Excel."""
@@ -1224,33 +1310,25 @@ def upload_survey():
         # ── CSV / Excel ─────────────────────────────────────────
         if ext == '.csv':
             df = pd.read_csv(f)
+            survey = _survey_from_df(df)
+            if survey is None:
+                return jsonify(success=False,
+                               error="Не удалось найти колонки. Ожидаются: Глубина, Зенитный угол, Азимут")
         elif ext in ('.xlsx', '.xls'):
-            df = pd.read_excel(f)
+            # Try WellPlan-style format first (header buried in sheet with metadata above)
+            f.seek(0)
+            survey = _parse_wellplan_excel(f)
+            if survey is None:
+                # Fall back to standard single-header read
+                f.seek(0)
+                df = pd.read_excel(f)
+                survey = _survey_from_df(df)
+            if survey is None:
+                return jsonify(success=False,
+                               error="Не удалось найти колонки. Ожидаются: Глубина, Зенитный угол, Азимут")
         else:
             return jsonify(success=False,
                            error="Поддерживаются форматы: CSV, Excel (.xlsx), WITSML (.xml)")
-
-        col_map = {}
-        for col in df.columns:
-            cl = col.strip().lower()
-            if cl in ('depth', 'глубина', 'md', 'measured depth', 'глубина м'):
-                col_map['depth'] = col
-            elif cl in ('inclination', 'зенитный угол', 'incl', 'зенитный', 'угол', 'зенитный угол °'):
-                col_map['inclination'] = col
-            elif cl in ('azimuth', 'азимут', 'azim', 'azi', 'азимут °'):
-                col_map['azimuth'] = col
-
-        if len(col_map) < 3:
-            return jsonify(success=False,
-                           error="Не удалось найти колонки. Ожидаются: Глубина, Зенитный угол, Азимут")
-
-        survey = []
-        for _, row in df.iterrows():
-            survey.append({
-                'depth': float(row[col_map['depth']]),
-                'inclination': float(row[col_map['inclination']]),
-                'azimuth': float(row[col_map['azimuth']]),
-            })
 
         validate_survey(survey)
         return jsonify(success=True, survey=survey, rows=len(survey))
