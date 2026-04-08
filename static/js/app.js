@@ -75,13 +75,13 @@ function convertInputValues() {
     const asmRows = document.getElementById('assembly-tbody').rows;
     for (const row of asmRows) {
         const inputs = row.querySelectorAll('input[type="number"]');
-        // [0]=len, [1]=od, [2]=id(mm→no convert), [3]=linwt, [4]=maxLoad
-        const types = ['depth', 'od', null, 'linwt', 'force'];
+        // [0]=len, [1]=od, [2]=id, [3]=linwt, [4]=maxLoad
+        const types = ['depth', 'od', 'od', 'linwt', 'force'];
         inputs.forEach((inp, i) => {
             const type = types[i];
             if (!type) return;
-            // Don't convert auto-calculated maxLoad — recalculate it instead
-            if (i === 4 && inp.dataset.auto === 'true') { inp.value = ''; return; }
+            // Don't convert auto-calculated fields — clear and recalculate instead
+            if ((i === 2 || i === 4) && inp.dataset.auto === 'true') { inp.value = ''; return; }
             const val = parseFloat(inp.value);
             if (!isNaN(val) && val !== 0) {
                 if (unitSystem === 'field') {
@@ -91,7 +91,8 @@ function convertInputValues() {
                 }
             }
         });
-        // Re-trigger auto-calc of maxLoad after unit switch
+        // Re-trigger auto-calc of ID and maxLoad after unit switch
+        autoCalcID(row);
         autoCalcMaxLoad(row);
     }
     // Convert survey depth column
@@ -1237,6 +1238,29 @@ function calcPipeTensile(odDisp, linwtDisp, gradeKey, connKey) {
 }
 
 /**
+ * Auto-calc inner diameter from OD + linwt (steel tube formula).
+ * Only runs if the ID field is empty or was previously auto-calculated.
+ */
+function autoCalcID(tr) {
+    const numInputs = tr.querySelectorAll('input[type="number"]');
+    const idInp  = numInputs[2];
+    const odDisp = parseFloat(numInputs[1].value);
+    const wtDisp = parseFloat(numInputs[3].value);
+    if (!idInp || isNaN(odDisp) || isNaN(wtDisp) || odDisp === 0 || wtDisp === 0) return;
+    if (idInp.dataset.userSet) return; // user manually entered, don't overwrite
+
+    const od_mm   = toSI(odDisp, 'od');      // → mm
+    const wt_kgm  = toSI(wtDisp, 'linwt');   // → kg/m
+    // Derive ID from: linwt = ρ_steel × π/4 × (OD² - ID²) × 1e-6  (OD,ID in mm)
+    const id_sq = od_mm * od_mm - (wt_kgm * 4) / (7850 * Math.PI * 1e-6);
+    if (id_sq <= 0) return;
+    const id_mm = Math.sqrt(id_sq);
+    const disp  = fromSI(id_mm, 'od');
+    idInp.value = disp.toFixed(unitSystem === 'field' ? 4 : 2);
+    idInp.dataset.auto = 'true';
+}
+
+/**
  * Trigger auto-calc of max load for a single assembly <tr>.
  * Reads OD, linwt, grade, conn from that row; writes to maxLoad input.
  */
@@ -1289,6 +1313,7 @@ function makeAssemblyRow(name, len, od, maxLoad, wtPerUnit, grade, conn, id_mm) 
                 <option value="STC">STC</option>
                 <option value="EUE">EUE</option>
                 <option value="NUE">NUE</option>
+                <option value="VAM TOP">VAM TOP</option>
                 <option value="Drill-TJ">Drill TJ</option>
             </select>
         </td>
@@ -1307,7 +1332,25 @@ function makeAssemblyRow(name, len, od, maxLoad, wtPerUnit, grade, conn, id_mm) 
     const inputs = tr.querySelectorAll('input[type="number"]');
     const lenInp  = inputs[0];
     const odInp   = inputs[1];
+    const idInp   = inputs[2];
     const wtPuInp = inputs[3];
+
+    // Auto-ID from OD + linwt (only when not manually set)
+    const recalcID = () => autoCalcID(tr);
+    odInp.addEventListener('input',   recalcID);
+    wtPuInp.addEventListener('input', recalcID);
+    idInp.addEventListener('input', () => {
+        if (idInp.value.trim() !== '') {
+            idInp.dataset.userSet = 'true';
+            delete idInp.dataset.auto;
+        } else {
+            delete idInp.dataset.userSet;
+            autoCalcID(tr);
+        }
+    });
+
+    // Mark pre-filled ID as user-set so it won't be overwritten on OD/linwt change
+    if (id_mm != null && id_mm !== '') idInp.dataset.userSet = 'true';
 
     // Auto-maxLoad from OD + linwt + grade + conn
     const recalcMax = () => autoCalcMaxLoad(tr);
@@ -1319,6 +1362,7 @@ function makeAssemblyRow(name, len, od, maxLoad, wtPerUnit, grade, conn, id_mm) 
     wtPuInp.addEventListener('input',  () => updateAssemblySummary());
 
     // Trigger on initial value (e.g. when loading sample)
+    if (od && wtPerUnit) recalcID();
     if (gradeVal && connVal && od && wtPerUnit) recalcMax();
 }
 
